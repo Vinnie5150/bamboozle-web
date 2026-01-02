@@ -1,0 +1,2221 @@
+"use client";
+
+import { useEffect, useState, useRef } from "react";
+import { useParams } from "next/navigation";
+import { db } from "@/lib/firebase";
+import { onAuthStateChanged, signInAnonymously } from "firebase/auth";
+import { auth } from "@/lib/firebase";
+
+import {
+  collection,
+  onSnapshot,
+  query,
+  orderBy,
+  doc,
+  writeBatch,
+  getDocs,
+  getDoc,
+  setDoc,
+  serverTimestamp,
+  limit,
+  deleteField,
+  runTransaction,
+} from "firebase/firestore";
+
+import MapSvg from "@/app/_components/MapSvg";
+
+type Player = {
+  id: string;
+  name: string;
+  avatar: string;
+  credits: number;
+  dominance: number;
+  beerCount?: number;
+  units: {
+    foot: number;
+    cav: number;
+    arch: number;
+  exp?: {
+    foot: number;
+    cav: number;
+    arch: number;
+    };
+  };
+};
+
+type Tile = {
+  id: string;
+  ownerPlayerId: string | null;
+  isBasecamp: boolean;
+  basecampOwnerPlayerId?: string | null;
+  isStartTile?: boolean;
+};
+
+type DraftRow = {
+  credits: number;
+  foot: number;
+  cav: number;
+  arch: number;
+  expFoot: number;
+  expCav: number;
+  expArch: number;
+};
+
+
+export default function HostPage() {
+  const params = useParams();
+  const gameId = params.gameId as string;
+
+  const [players, setPlayers] = useState<Player[]>([]);
+  const [tiles, setTiles] = useState<Tile[]>([]);
+  const [tileTroops, setTileTroops] = useState<
+    Record<string, { foot: number; cav: number; arch: number }>
+  >({});
+    const [playerTroopTotals, setPlayerTroopTotals] = useState<
+    Record<string, { foot: number; cav: number; arch: number }>
+  >({});
+  const [selectedTileId, setSelectedTileId] = useState<string>("");
+
+
+  const [battleLog, setBattleLog] = useState<Array<{ id: string } & any>>([]);
+  const [bankLog, setBankLog] = useState<Array<{ id: string } & any>>([]);
+
+  const [magesByPlayer, setMagesByPlayer] = useState<Record<string, { tileId: string } | null>>(
+    {}
+  );
+
+const [mapZoom, setMapZoom] = useState(1);
+const [mapPan, setMapPan] = useState({ x: 0, y: 0 });
+
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+
+function zoomBy(delta: number) {
+  setMapZoom((z) => clamp(Number((z + delta).toFixed(2)), 0.7, 2.0));
+}
+
+function resetView() {
+  setMapZoom(1);
+  setMapPan({ x: 0, y: 0 });
+}
+
+function onWheelZoom(e: React.WheelEvent) {
+  // CTRL+scroll is vaak browser zoom — laat ook zonder CTRL werken
+  e.preventDefault();
+  const dir = e.deltaY > 0 ? -1 : 1; // scroll down -> out, scroll up -> in
+  zoomBy(dir * 0.08);
+}
+
+const isPanningRef = useRef(false);
+const panStartRef = useRef({ x: 0, y: 0 });
+const panOriginRef = useRef({ x: 0, y: 0 });
+
+function onPanStart(e: React.MouseEvent) {
+  // enkel links klikken
+  if (e.button !== 0) return;
+  isPanningRef.current = true;
+  panStartRef.current = { x: e.clientX, y: e.clientY };
+  panOriginRef.current = { x: mapPan.x, y: mapPan.y };
+}
+
+function onPanMove(e: React.MouseEvent) {
+  if (!isPanningRef.current) return;
+  const dx = e.clientX - panStartRef.current.x;
+  const dy = e.clientY - panStartRef.current.y;
+  setMapPan({ x: panOriginRef.current.x + dx, y: panOriginRef.current.y + dy });
+}
+
+function onPanEnd() {
+  isPanningRef.current = false;
+}
+
+
+  // pregame draft state (BELANGRIJK: hooks bovenaan)
+  const [draft, setDraft] = useState<Record<string, DraftRow>>({});
+
+  // timer state
+  const [startEndsAtMs, setStartEndsAtMs] = useState<number | null>(null);
+  const [startActive, setStartActive] = useState(false);
+  const [nowMs, setNowMs] = useState<number>(Date.now());
+  // winter is coming
+  const [winterLevel, setWinterLevel] = useState<number>(0);
+  // bamboozle: take over enemy tile
+  const [bbActorId, setBbActorId] = useState<string>("");
+  const [bbTargetTileId, setBbTargetTileId] = useState<string>("");
+
+    // bamboozle: destroy dragonglass
+  const [dgTargetPlayerId, setDgTargetPlayerId] = useState<string>("");
+  // bamboozle - remove mage
+  const [mageTargets, setMageTargets] = useState<string[]>([]);
+  const [selectedMageVictim, setSelectedMageVictim] = useState<string>("");
+  // bamboozle - destroy troops on a specific tile
+  const [bbVictimPlayerId, setBbVictimPlayerId] = useState<string>("");
+  const [bbVictimTileId, setBbVictimTileId] = useState<string>("");
+
+  const [bbKillFoot, setBbKillFoot] = useState<number>(0);
+  const [bbKillCav, setBbKillCav] = useState<number>(0);
+  const [bbKillArch, setBbKillArch] = useState<number>(0);
+
+  const [bbVictimTilesWithTroops, setBbVictimTilesWithTroops] = useState<
+    Array<{ tileId: string; foot: number; cav: number; arch: number }>
+  >([]);
+
+useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        signInAnonymously(auth).catch((err) => {
+          console.error("Anonymous sign-in failed:", err);
+          alert("Anonymous login failed. Check console.");
+        });
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // players listener
+  useEffect(() => {
+    const q = query(
+      collection(db, "games", gameId, "players"),
+      orderBy("createdAt")
+    );
+
+    const unsub = onSnapshot(q, (snapshot) => {
+      const list: Player[] = snapshot.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<Player, "id">),
+      }));
+
+      setPlayers(list);
+
+      // init draft for new players (zonder bestaande overschrijven)
+      setDraft((prev) => {
+        const next = { ...prev };
+        for (const p of list) {
+          if (!next[p.id]) {
+            next[p.id] = {
+              credits: p.credits ?? 0,
+              foot: p.units?.foot ?? 0,
+              cav: p.units?.cav ?? 0,
+              arch: p.units?.arch ?? 0,
+              expFoot: p.exp?.foot ?? 0,
+              expCav: p.exp?.cav ?? 0,
+              expArch: p.exp?.arch ?? 0,
+            };
+          }
+        }
+        return next;
+      });
+    });
+
+    return () => unsub();
+  }, [gameId]);
+
+    useEffect(() => {
+  if (!gameId) return;
+
+  const unsubs: Array<() => void> = [];
+
+  const allPlayerTiles: Record<
+    string,
+    Record<string, { foot: number; cav: number; arch: number }>
+  > = {};
+
+  function recompute() {
+    const next: Record<string, { foot: number; cav: number; arch: number }> = {};
+
+    Object.values(allPlayerTiles).forEach((byTile) => {
+      Object.entries(byTile).forEach(([tileId, d]) => {
+        const cur = next[tileId] ?? { foot: 0, cav: 0, arch: 0 };
+        next[tileId] = {
+          foot: cur.foot + (d.foot ?? 0),
+          cav: cur.cav + (d.cav ?? 0),
+          arch: cur.arch + (d.arch ?? 0),
+        };
+      });
+    });
+
+    setTileTroops(next);
+  }
+
+  players.forEach((p) => {
+    const depCol = collection(db, "games", gameId, "deployments", p.id, "tiles");
+
+    const unsub = onSnapshot(depCol, (snap) => {
+      const byTile: Record<string, { foot: number; cav: number; arch: number }> =
+        {};
+
+      snap.docs.forEach((d) => {
+        const data = d.data() as any;
+        byTile[d.id] = {
+          foot: Number(data.foot ?? 0),
+          cav: Number(data.cav ?? 0),
+          arch: Number(data.arch ?? 0),
+        };
+      });
+
+      allPlayerTiles[p.id] = byTile;
+      recompute();
+    });
+
+    unsubs.push(unsub);
+  });
+
+  if (players.length === 0) setTileTroops({});
+
+  return () => {
+    unsubs.forEach((u) => u());
+  };
+}, [gameId, players]);
+
+    // ===== live totals per player (sum of deployments) =====
+  useEffect(() => {
+    if (!gameId) return;
+
+    const unsubs: Array<() => void> = [];
+    const nextTotals: Record<string, { foot: number; cav: number; arch: number }> = {};
+
+    players.forEach((p) => {
+      const depCol = collection(db, "games", gameId, "deployments", p.id, "tiles");
+
+      const unsub = onSnapshot(depCol, (snap) => {
+        let foot = 0, cav = 0, arch = 0;
+
+        snap.docs.forEach((d) => {
+          const data = d.data() as any;
+          foot += Number(data.foot ?? 0);
+          cav += Number(data.cav ?? 0);
+          arch += Number(data.arch ?? 0);
+        });
+
+        nextTotals[p.id] = { foot, cav, arch };
+        setPlayerTroopTotals({ ...nextTotals });
+      });
+
+      unsubs.push(unsub);
+    });
+
+    if (players.length === 0) setPlayerTroopTotals({});
+
+    return () => unsubs.forEach((u) => u());
+  }, [gameId, players]);
+
+
+    // all mages (for map icon display)
+  useEffect(() => {
+    if (!gameId) return;
+
+    const unsubs: Array<() => void> = [];
+    const nextByPlayer: Record<string, { tileId: string } | null> = {};
+
+    players.forEach((p) => {
+      const ref = doc(db, "games", gameId, "mages", p.id);
+      const unsub = onSnapshot(ref, (snap) => {
+        nextByPlayer[p.id] = snap.exists() ? ({ tileId: (snap.data() as any).tileId } as any) : null;
+        setMagesByPlayer({ ...nextByPlayer });
+      });
+      unsubs.push(unsub);
+    });
+
+    if (players.length === 0) setMagesByPlayer({});
+
+    return () => unsubs.forEach((u) => u());
+  }, [gameId, players]);
+
+
+  // tiles listener
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "games", gameId, "tiles"), (snap) => {
+      const list: Tile[] = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as any) }))
+        .sort((a, b) => Number(a.id) - Number(b.id));
+      setTiles(list);
+    });
+
+    return () => unsub();
+  }, [gameId]);
+
+
+  useEffect(() => {
+  if (!gameId) return;
+
+  const ql = query(
+    collection(db, "games", gameId, "battleLog"),
+    orderBy("createdAt", "desc"),
+    limit(10)
+  );
+
+  const unsub = onSnapshot(ql, (snap) => {
+    const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+    setBattleLog(rows);
+  });
+
+  return () => unsub();
+}, [gameId]);
+
+  useEffect(() => {
+  if (!gameId) return;
+
+  const ql = query(
+    collection(db, "games", gameId, "bankLog"),
+    orderBy("createdAt", "desc"),
+    limit(20)
+  );
+
+  const unsub = onSnapshot(ql, (snap) => {
+    const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+    setBankLog(rows);
+  });
+
+  return () => unsub();
+}, [gameId]);
+
+
+  // game doc listener (timer)
+  useEffect(() => {
+    const ref = doc(db, "games", gameId);
+
+    const unsub = onSnapshot(ref, (snap) => {
+      const data = snap.data() as any;
+      const startClaim = data?.startClaim ?? null;
+
+      setStartActive(!!startClaim?.active);
+
+      const endsAt = startClaim?.endsAt?.toDate?.()
+        ? startClaim.endsAt.toDate()
+        : null;
+
+      setStartEndsAtMs(endsAt ? endsAt.getTime() : null);
+      const wl = Number(data?.winter?.level ?? 0);
+      setWinterLevel(Math.max(0, Math.min(10, wl)));
+
+    });
+
+    return () => unsub();
+  }, [gameId]);
+
+  // local ticking clock
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 250);
+    return () => clearInterval(t);
+  }, []);
+
+  async function setWinterLevelInGame(nextLevel: number) {
+  const lvl = Math.max(0, Math.min(10, Math.floor(Number(nextLevel) || 0)));
+  const ref = doc(db, "games", gameId);
+
+  await setDoc(
+    ref,
+    {
+      winter: {
+        level: lvl,
+        updatedAt: serverTimestamp(),
+      },
+    },
+    { merge: true }
+  );
+}
+
+function pickRandom<T>(arr: T[], n: number) {
+  const copy = [...arr];
+  // Fisher-Yates shuffle partial
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, Math.min(n, copy.length));
+}
+
+async function triggerFrostGiantsAttack() {
+  // veiligheid
+  if (!gameId) return;
+  if (tiles.length === 0) {
+    alert("Tiles not loaded yet.");
+    return;
+  }
+
+  // enkel non-basecamp tiles
+  const candidates = tiles.filter((t) => !t.isBasecamp);
+
+  if (candidates.length < 15) {
+    alert("Not enough non-basecamp tiles to attack.");
+    return;
+  }
+
+  const attacked = pickRandom(candidates, 15);
+
+  // We gaan: per attacked tile -> check owner -> als owner dragonglass => consume; else halve troops (rounded up loss)
+  // Troops staan in deployments/{owner}/tiles/{tileId}
+  // Dragonglass staat in players/{owner}
+  const batch = writeBatch(db);
+
+  const results: any[] = [];
+
+  for (const t of attacked) {
+    const tileId = String(t.id);
+    const ownerId: string | null = t.ownerPlayerId ?? null;
+
+    // neutral tile: enkel loggen
+    if (!ownerId) {
+      results.push({ tileId, ownerId: null, note: "neutral" });
+      continue;
+    }
+
+    // basecamps zijn uitgesloten, maar extra safety:
+    if (t.isBasecamp) {
+      results.push({ tileId, ownerId, note: "basecamp_skipped" });
+      continue;
+    }
+
+    const playerRef = doc(db, "games", gameId, "players", ownerId);
+    const playerSnap = await getDoc(playerRef);
+    const playerData = (playerSnap.data() as any) ?? {};
+    const hasDG = !!playerData.hasDragonglass;
+
+      if (hasDG) {
+        // consume dragonglass, no troop loss
+        batch.update(playerRef, { hasDragonglass: false });
+
+        results.push({
+          tileId,
+          ownerId,
+          dragonglassConsumed: true,
+          losses: { foot: 0, cav: 0, arch: 0 },
+        });
+        continue;
+      }
+
+
+    // no dragonglass => troop loss
+    const depRef = doc(db, "games", gameId, "deployments", ownerId, "tiles", tileId);
+    const depSnap = await getDoc(depRef);
+    const dep = (depSnap.data() as any) ?? {};
+
+    const cur = {
+      foot: Number(dep.foot ?? 0),
+      cav: Number(dep.cav ?? 0),
+      arch: Number(dep.arch ?? 0),
+    };
+
+    // verlies = ceil(half), over = floor(half)
+    const next = {
+      foot: Math.floor(cur.foot / 2),
+      cav: Math.floor(cur.cav / 2),
+      arch: Math.floor(cur.arch / 2),
+    };
+
+    const losses = {
+      foot: cur.foot - next.foot, // = ceil(half)
+      cav: cur.cav - next.cav,
+      arch: cur.arch - next.arch,
+    };
+
+    batch.set(depRef, next, { merge: true });
+    // ✅ if all troops gone => tile becomes neutral
+      const becomesEmpty = next.foot + next.cav + next.arch <= 0;
+
+      if (becomesEmpty) {
+        const attackedTileRef = doc(db, "games", gameId, "tiles", tileId);
+        batch.update(attackedTileRef, { ownerPlayerId: null });
+
+        // ✅ if the owner's mage was on this tile => mage destroyed
+        const mageRef = doc(db, "games", gameId, "mages", ownerId);
+        const mageSnap = await getDoc(mageRef);
+        if (mageSnap.exists()) {
+          const md = mageSnap.data() as any;
+          if (String(md.tileId ?? "") === String(tileId)) {
+            batch.delete(mageRef);
+          }
+        }
+      }
+
+
+    results.push({
+      tileId,
+      ownerId,
+      dragonglassConsumed: false,
+      before: cur,
+      after: next,
+      losses,
+    });
+  }
+
+  // winter reset naar 0 + timestamp
+  const gameRef = doc(db, "games", gameId);
+  batch.set(
+    gameRef,
+    {
+      winter: {
+        level: 0,
+        lastTriggeredAt: serverTimestamp(),
+      },
+    },
+    { merge: true }
+  );
+
+  // log één samenvattende entry in battleLog zodat iedereen het ziet
+  const logRef = doc(collection(db, "games", gameId, "battleLog"));
+  batch.set(
+    logRef,
+    {
+      createdAt: serverTimestamp(),
+      type: "FROST_GIANTS_ATTACK",
+      attackedTileIds: attacked.map((x) => String(x.id)),
+      results,
+    },
+    { merge: true }
+  );
+
+  await batch.commit();
+
+  alert("❄️ Frost Giants attacked 15 random tiles! Winter level reset to 0.");
+}
+async function bamboozleDestroyDragonglass() {
+  if (!dgTargetPlayerId) {
+    alert("Choose a player first.");
+    return;
+  }
+
+  const playerRef = doc(db, "games", gameId, "players", dgTargetPlayerId);
+
+  const p = players.find((x) => x.id === dgTargetPlayerId);
+  const name = p?.name ?? dgTargetPlayerId;
+
+  const ok = confirm(`🎴 Destroy Dragonglass of ${name}?`);
+  if (!ok) return;
+
+  // remove dragonglass
+  await setDoc(
+    playerRef,
+    {
+      hasDragonglass: false,
+    },
+    { merge: true }
+  );
+
+  // optional: log to bankLog so everyone sees it
+  const logRef = doc(collection(db, "games", gameId, "bankLog"));
+  await setDoc(
+    logRef,
+    {
+      createdAt: serverTimestamp(),
+      type: "BAMBOOZLE_DG_DESTROY",
+      playerId: dgTargetPlayerId,
+    },
+    { merge: true }
+  );
+
+  alert(`✅ Dragonglass destroyed for ${name}.`);
+}
+    // listener tiles met troops voor geselecteerde victim
+    useEffect(() => {
+      if (!gameId) return;
+
+      // reset wanneer speler veranderd
+      setBbVictimTileId("");
+      setBbVictimTilesWithTroops([]);
+
+      if (!bbVictimPlayerId) return;
+
+      const depCol = collection(db, "games", gameId, "deployments", bbVictimPlayerId, "tiles");
+
+      const unsub = onSnapshot(depCol, (snap) => {
+        const list: Array<{ tileId: string; foot: number; cav: number; arch: number }> = [];
+
+        snap.docs.forEach((d) => {
+          const data = d.data() as any;
+          const foot = Number(data.foot ?? 0);
+          const cav = Number(data.cav ?? 0);
+          const arch = Number(data.arch ?? 0);
+
+          // enkel tiles tonen waar effectief troops staan
+          if (foot + cav + arch > 0) {
+            list.push({ tileId: d.id, foot, cav, arch });
+          }
+        });
+
+        // sort numeriek op tileId
+        list.sort((a, b) => Number(a.tileId) - Number(b.tileId));
+
+        setBbVictimTilesWithTroops(list);
+      });
+
+  return () => unsub();
+}, [gameId, bbVictimPlayerId]);
+
+
+  async function initTiles() {
+    const existing = await getDocs(collection(db, "games", gameId, "tiles"));
+    if (!existing.empty) {
+      alert("Tiles already initialized");
+      return;
+    }
+
+    const batch = writeBatch(db);
+
+    for (let i = 0; i < 60; i++) {
+      const tileRef = doc(db, "games", gameId, "tiles", String(i));
+      batch.set(tileRef, {
+        ownerPlayerId: null,
+        isBasecamp: false,
+        basecampOwnerPlayerId: null,
+        isStartTile: false,
+        adjacent: [],
+      });
+    }
+
+    await batch.commit();
+    alert("✅ Tiles initialized");
+  }
+
+  function colorForPlayer(playerId: string | null) {
+    if (!playerId) return "#eee";
+    const idx = players.findIndex((p) => p.id === playerId);
+    const palette = [
+      "#ffd6a5",
+      "#caffbf",
+      "#9bf6ff",
+      "#bdb2ff",
+      "#ffc6ff",
+      "#fdffb6",
+      "#a0c4ff",
+      "#ffadad",
+    ];
+    return palette[(idx >= 0 ? idx : 0) % palette.length] ?? "#ddd";
+  }
+
+    useEffect(() => {
+  // players die een mage hebben
+  const withMage = players
+    .filter((p) => !!magesByPlayer[p.id]?.tileId)
+    .map((p) => p.id);
+
+  setMageTargets(withMage);
+
+  // als huidige selectie niet meer geldig is, reset
+  if (selectedMageVictim && !withMage.includes(selectedMageVictim)) {
+    setSelectedMageVictim("");
+  }
+}, [players, magesByPlayer, selectedMageVictim]);
+
+
+    const mageByTile = (() => {
+    const m: Record<string, string> = {};
+    Object.entries(magesByPlayer).forEach(([pid, md]) => {
+      if (md?.tileId) m[md.tileId] = pid;
+    });
+    return m;
+  })();
+
+
+  function nameFor(pid?: string | null) {
+  if (!pid) return "Unknown";
+  return players.find((p) => p.id === pid)?.name ?? pid;
+}
+  // lijst met bezette enemy tiles
+    function occupiedEnemyTiles(actorId: string) {
+      return tiles
+        .filter((t) => {
+          const owner = t.ownerPlayerId ?? null;
+          if (!owner) return false;            // enkel bezette tiles
+          if (!actorId) return false;
+          if (owner === actorId) return false; // niet van jezelf
+          if (t.isBasecamp) return false;      // basecamps veilig (zoals eerder)
+          return true;
+        })
+        .sort((a, b) => Number(a.id) - Number(b.id));
+    }
+
+
+    // ===== Dominance + Ranking helpers =====
+  const TOTAL_TILES = 60;
+
+  function calcDominancePct(pid: string) {
+    const owned = tiles.filter((t) => {
+      const isOwn = t.ownerPlayerId === pid;
+      const isOwnBasecamp = !!t.isBasecamp && t.basecampOwnerPlayerId === pid;
+      return isOwn || isOwnBasecamp;
+    }).length;
+
+    return TOTAL_TILES > 0 ? (owned / TOTAL_TILES) * 100 : 0;
+  }
+
+  function getUnitTotals(pid: string) {
+    // som van alle deployments van deze speler over alle tiles
+    // tileTroops is aggregated over ALL players, dus dat kunnen we niet gebruiken voor één speler.
+    // Daarom gebruiken we hier de player.units als "start units" niet; beter: we gebruiken p.units als fallback.
+    // Ranking rule vroeg: cav/arch/foot -> jij bedoelt total troops in bezit.
+    // In jouw app heb je momenteel geen "per player totals" live behalve deployments per player (host leest die niet apart).
+    // Simpelste: gebruik p.units (als jij die updatet) OF voeg later per-player totals toe.
+    // Voor nu: we nemen p.units uit player doc, want die bestaat.
+    const pl = players.find((p) => p.id === pid);
+    return {
+      cav: Number(pl?.units?.cav ?? 0),
+      arch: Number(pl?.units?.arch ?? 0),
+      foot: Number(pl?.units?.foot ?? 0),
+    };
+  }
+
+  function rankPlayers(list: Player[]) {
+    const withScores = list.map((p) => {
+      const dominance = calcDominancePct(p.id);
+      const credits = Number(p.credits ?? 0);
+            const tot = playerTroopTotals[p.id] ?? { foot: 0, cav: 0, arch: 0 };
+      const u = { cav: tot.cav, arch: tot.arch, foot: tot.foot };
+
+
+      return {
+        ...p,
+        dominance,
+        credits,
+        u,
+      };
+    });
+
+    withScores.sort((a, b) => {
+      // 1) dominance desc
+      if (b.dominance !== a.dominance) return b.dominance - a.dominance;
+      // 2) credits desc
+      if (b.credits !== a.credits) return b.credits - a.credits;
+      // 3) cav desc
+      if (b.u.cav !== a.u.cav) return b.u.cav - a.u.cav;
+      // 4) arch desc
+      if (b.u.arch !== a.u.arch) return b.u.arch - a.u.arch;
+      // 5) foot desc
+      if (b.u.foot !== a.u.foot) return b.u.foot - a.u.foot;
+      return 0;
+    });
+
+    return withScores;
+  }
+
+  const rankedPlayers = rankPlayers(players);
+
+
+
+  // helpers voor basecamp spreiding (grid-based voor nu)
+  function tileToXY(tileId: number) {
+    const cols = 10;
+    const x = tileId % cols;
+    const y = Math.floor(tileId / cols);
+    return { x, y };
+  }
+
+  function dist(a: number, b: number) {
+    const A = tileToXY(a);
+    const B = tileToXY(b);
+    return Math.abs(A.x - B.x) + Math.abs(A.y - B.y);
+  }
+
+  function neighborCountGrid(tileId: number) {
+    const cols = 10;
+    const rows = 6;
+    const x = tileId % cols;
+    const y = Math.floor(tileId / cols);
+
+    let count = 0;
+    if (x > 0) count++;
+    if (x < cols - 1) count++;
+    if (y > 0) count++;
+    if (y < rows - 1) count++;
+    return count;
+  }
+
+  function pickSpreadTiles(n: number, total: number) {
+    if (n <= 0) return [];
+
+    const candidates = Array.from({ length: total }, (_, i) => i).filter(
+      (id) => neighborCountGrid(id) >= 4
+    );
+
+    if (candidates.length < n) {
+      alert("Not enough valid tiles for basecamps with current constraint.");
+      return [];
+    }
+
+    const picked: number[] = [candidates[0]];
+
+    while (picked.length < n) {
+      let best = -1;
+      let bestScore = -1;
+
+      for (const c of candidates) {
+        if (picked.includes(c)) continue;
+        const minD = Math.min(...picked.map((p) => dist(c, p)));
+        if (minD > bestScore) {
+          bestScore = minD;
+          best = c;
+        }
+      }
+
+      if (best === -1) break;
+      picked.push(best);
+    }
+
+    return picked;
+  }
+
+  const FIXED_BASECAMP_TILES = ["42", "14", "59", "21", "22", "41", "50", "5"];
+    function shuffle<T>(arr: T[]) {
+      const a = [...arr];
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+
+
+  async function assignBasecamps() {
+        if (players.length === 0) {
+          alert("No players yet.");
+          return;
+        }
+        if (tiles.length !== 60) {
+          alert("Tiles not initialized (need 60 tiles).");
+          return;
+        }
+
+        if (players.length > FIXED_BASECAMP_TILES.length) {
+          alert(`Too many players (${players.length}). Max is ${FIXED_BASECAMP_TILES.length} with the fixed basecamps.`);
+          return;
+        }
+
+        const anyBasecamp = tiles.some((t) => t.isBasecamp);
+        if (anyBasecamp) {
+          const ok = confirm("Basecamps already exist. Overwrite them?");
+          if (!ok) return;
+        }
+
+        // 1) kies random basecamp tiles uit de vaste set (zelfde plekken, random toewijzing)
+        const shuffled = shuffle(FIXED_BASECAMP_TILES);
+        const pickedTileIds = shuffled.slice(0, players.length);
+
+        const batch = writeBatch(db);
+
+        // 2) reset alle basecamps flags
+        for (const t of tiles) {
+          const ref = doc(db, "games", gameId, "tiles", t.id);
+          batch.update(ref, {
+            isBasecamp: false,
+            basecampOwnerPlayerId: null,
+          });
+        }
+
+        // 3) wijs basecamps toe aan spelers (random mapping)
+        players.forEach((p, idx) => {
+          const tileId = pickedTileIds[idx];
+          const ref = doc(db, "games", gameId, "tiles", tileId);
+          batch.update(ref, {
+            isBasecamp: true,
+            basecampOwnerPlayerId: p.id,
+            ownerPlayerId: p.id,
+          });
+        });
+
+        await batch.commit();
+        alert("✅ Basecamps assigned (fixed tiles, random players)");
+      }
+
+
+  async function startStartTimer() {
+    const ref = doc(db, "games", gameId);
+    await setDoc(
+      ref,
+      {
+        startClaim: {
+          active: true,
+          endsAt: new Date(Date.now() + 2 * 60 * 1000),
+          startedAt: serverTimestamp(),
+        },
+      },
+      { merge: true }
+    );
+  }
+
+  async function lockStartNow() {
+    const ref = doc(db, "games", gameId);
+    await setDoc(ref, { startClaim: { active: false } }, { merge: true });
+  }
+
+  const timeLeftSec =
+    startEndsAtMs !== null
+      ? Math.max(0, Math.ceil((startEndsAtMs - nowMs) / 1000))
+      : null;
+
+  async function savePregameSetup() {
+    const batch = writeBatch(db);
+
+    players.forEach((p) => {
+      const d = draft[p.id];
+      if (!d) return;
+
+      const ref = doc(db, "games", gameId, "players", p.id);
+      batch.update(ref, {
+      credits: d.credits,
+      units: { foot: d.foot, cav: d.cav, arch: d.arch },
+      exp: { foot: d.expFoot, cav: d.expCav, arch: d.expArch },
+
+      startCredits: d.credits,
+      startUnits: { foot: d.foot, cav: d.cav, arch: d.arch },
+      startExp: { foot: d.expFoot, cav: d.expCav, arch: d.expArch },
+      });
+    });
+
+    await batch.commit();
+    alert("✅ Pregame setup saved");
+  }
+
+  function findBasecampTileIdForPlayer(playerId: string): string | null {
+  const bc = tiles.find(
+    (t) => t.isBasecamp && t.basecampOwnerPlayerId === playerId
+  );
+  return bc ? bc.id : null;
+}
+  async function finalizeStartAndFillRemainder() {
+  // 1) lock start phase in game doc
+  await lockStartNow();
+
+  for (const p of players) {
+    const basecampTileId = findBasecampTileIdForPlayer(p.id);
+    if (!basecampTileId) {
+      alert(`No basecamp found for player ${p.name}`);
+      return;
+    }
+
+    // read player doc to get startUnits
+    const pRef = doc(db, "games", gameId, "players", p.id);
+    const pSnap = await getDoc(pRef);
+    const pdata = (pSnap.data() as any) ?? {};
+    const su = pdata.startUnits ?? pdata.units ?? { foot: 0, cav: 0, arch: 0 };
+
+    const startUnits = {
+      foot: Number(su.foot ?? 0),
+      cav: Number(su.cav ?? 0),
+      arch: Number(su.arch ?? 0),
+    };
+
+    // read all deployments for this player
+    const depCol = collection(db, "games", gameId, "deployments", p.id, "tiles");
+    const depSnap = await getDocs(depCol);
+
+    let deployed = { foot: 0, cav: 0, arch: 0 };
+    let basecampExisting = { foot: 0, cav: 0, arch: 0 };
+
+    depSnap.docs.forEach((d) => {
+      const data = d.data() as any;
+      const entry = {
+        foot: Number(data.foot ?? 0),
+        cav: Number(data.cav ?? 0),
+        arch: Number(data.arch ?? 0),
+      };
+
+      deployed.foot += entry.foot;
+      deployed.cav += entry.cav;
+      deployed.arch += entry.arch;
+
+      if (d.id === basecampTileId) {
+        basecampExisting = entry;
+      }
+    });
+
+    const remaining = {
+      foot: Math.max(0, startUnits.foot - deployed.foot),
+      cav: Math.max(0, startUnits.cav - deployed.cav),
+      arch: Math.max(0, startUnits.arch - deployed.arch),
+    };
+
+    // write remainder to basecamp deployment
+    const bcDepRef = doc(
+      db,
+      "games",
+      gameId,
+      "deployments",
+      p.id,
+      "tiles",
+      basecampTileId
+    );
+
+    await setDoc(
+      bcDepRef,
+      {
+        foot: basecampExisting.foot + remaining.foot,
+        cav: basecampExisting.cav + remaining.cav,
+        arch: basecampExisting.arch + remaining.arch,
+      },
+      { merge: true }
+    );
+
+    // lock player
+    await setDoc(
+      pRef,
+      { startReady: true, startReadyAt: serverTimestamp() },
+      { merge: true }
+    );
+  }
+
+  alert("✅ Finalized. Remainder troops added to basecamps and players locked.");
+}
+
+  async function commitBatches(
+  ops: Array<(batch: ReturnType<typeof writeBatch>) => void>,
+  chunkSize = 450
+) {
+  for (let i = 0; i < ops.length; i += chunkSize) {
+    const batch = writeBatch(db);
+    const chunk = ops.slice(i, i + chunkSize);
+    chunk.forEach((fn) => fn(batch));
+    await batch.commit();
+  }
+}
+
+async function bamboozleDestroyMage(victimPlayerId: string) {
+  if (!victimPlayerId) return;
+
+  const ok = confirm(`Destroy Mage of ${nameFor(victimPlayerId)}?`);
+  if (!ok) return;
+
+  const mageRef = doc(db, "games", gameId, "mages", victimPlayerId);
+  const logRef = doc(collection(db, "games", gameId, "battleLog"));
+
+  const batch = writeBatch(db);
+
+  // mage verwijderen
+  batch.delete(mageRef);
+
+  // (optioneel) log zodat iedereen het ziet
+  batch.set(
+    logRef,
+    {
+      createdAt: serverTimestamp(),
+      type: "BAMBOOZLE_DESTROY_MAGE",
+      playerId: victimPlayerId,
+    },
+    { merge: true }
+  );
+
+  await batch.commit();
+
+  alert(`🧙‍♂️ Mage destroyed for ${nameFor(victimPlayerId)}.`);
+}
+
+async function bamboozleDestroyTroops() {
+  const victimId = bbVictimPlayerId;
+  const tileId = bbVictimTileId;
+
+  const kill = {
+    foot: Math.max(0, Math.floor(Number(bbKillFoot) || 0)),
+    cav: Math.max(0, Math.floor(Number(bbKillCav) || 0)),
+    arch: Math.max(0, Math.floor(Number(bbKillArch) || 0)),
+  };
+
+  if (!victimId) {
+    alert("Choose a victim player.");
+    return;
+  }
+  if (!tileId) {
+    alert("Choose a tile.");
+    return;
+  }
+  if (kill.foot + kill.cav + kill.arch <= 0) {
+    alert("Enter at least 1 troop to destroy.");
+    return;
+  }
+
+  const ok = confirm(
+    `Destroy troops on tile #${tileId} of ${nameFor(victimId)}?\n\n` +
+      `Foot: ${kill.foot}\nCav: ${kill.cav}\nArch: ${kill.arch}`
+  );
+  if (!ok) return;
+
+  const depRef = doc(db, "games", gameId, "deployments", victimId, "tiles", tileId);
+  const tileRef = doc(db, "games", gameId, "tiles", tileId);
+  const mageRef = doc(db, "games", gameId, "mages", victimId);
+  const logRef = doc(collection(db, "games", gameId, "battleLog"));
+
+  try {
+    await runTransaction(db, async (tx) => {
+  // ===== READS FIRST =====
+
+  // 1) deployment
+  const depSnap = await tx.get(depRef);
+  const dep = (depSnap.exists() ? (depSnap.data() as any) : {}) as any;
+
+  const cur = {
+    foot: Number(dep.foot ?? 0),
+    cav: Number(dep.cav ?? 0),
+    arch: Number(dep.arch ?? 0),
+  };
+
+  const next = {
+    foot: Math.max(0, cur.foot - kill.foot),
+    cav: Math.max(0, cur.cav - kill.cav),
+    arch: Math.max(0, cur.arch - kill.arch),
+  };
+
+  const nextTotal = next.foot + next.cav + next.arch;
+
+  // 2) alleen als leeg -> lees tile + mage (maar nog altijd VOOR writes!)
+  let tdata: any = null;
+  let md: any = null;
+
+  if (nextTotal <= 0) {
+    const tileSnap = await tx.get(tileRef);
+    tdata = tileSnap.exists() ? (tileSnap.data() as any) : null;
+
+    const mageSnap = await tx.get(mageRef);
+    md = mageSnap.exists() ? (mageSnap.data() as any) : null;
+  }
+
+  // ===== WRITES =====
+
+  // update deployment
+  tx.set(depRef, next, { merge: true });
+
+  // als alles 0 => tile neutral + mage weg indien mage op die tile stond
+  if (nextTotal <= 0) {
+    if (tdata && (tdata.ownerPlayerId ?? null) === victimId) {
+      tx.update(tileRef, { ownerPlayerId: null });
+    }
+
+    if (md && String(md.tileId ?? "") === String(tileId)) {
+      tx.delete(mageRef);
+    }
+  }
+
+  // log
+  tx.set(
+    logRef,
+    {
+      createdAt: serverTimestamp(),
+      type: "BAMBOOZLE_DESTROY_TROOPS",
+      victimId,
+      tileId,
+      kill,
+      before: cur,
+      after: next,
+    },
+    { merge: true }
+  );
+});
+
+
+    // reset inputs
+    setBbKillFoot(0);
+    setBbKillCav(0);
+    setBbKillArch(0);
+
+    alert(`🎴 Troops destroyed on tile #${tileId} (${nameFor(victimId)}).`);
+  } catch (err: any) {
+    console.error(err);
+    alert(`❌ ${err?.message ?? String(err)}`);
+  }
+}
+
+async function bamboozleTakeOverEnemyTile() {
+  if (!bbActorId) {
+    alert("Choose who plays the bamboozle (actor).");
+    return;
+  }
+  if (!bbTargetTileId) {
+    alert("Choose a target tile.");
+    return;
+  }
+
+  const tileId = String(bbTargetTileId);
+  const tileRef = doc(db, "games", gameId, "tiles", tileId);
+
+  try {
+    await runTransaction(db, async (tx) => {
+      // ===== READS FIRST =====
+      const tileSnap = await tx.get(tileRef);
+      if (!tileSnap.exists()) throw new Error("Tile not found");
+
+      const tdata = tileSnap.data() as any;
+      const curOwner: string | null = tdata.ownerPlayerId ?? null;
+      const isBasecamp = !!tdata.isBasecamp;
+
+      if (!curOwner) throw new Error("Tile is neutral (must be owned).");
+      if (curOwner === bbActorId) throw new Error("You already own this tile.");
+      if (isBasecamp) throw new Error("Cannot target a basecamp.");
+
+      // defender deployment ref (enemy troops to wipe)
+      const defDepRef = doc(db, "games", gameId, "deployments", curOwner, "tiles", tileId);
+      const defDepSnap = await tx.get(defDepRef);
+      const defDep = (defDepSnap.exists() ? (defDepSnap.data() as any) : {}) as any;
+
+      const beforeDef = {
+        foot: Number(defDep.foot ?? 0),
+        cav: Number(defDep.cav ?? 0),
+        arch: Number(defDep.arch ?? 0),
+      };
+
+      // defender mage check
+      const defMageRef = doc(db, "games", gameId, "mages", curOwner);
+      const defMageSnap = await tx.get(defMageRef);
+      const defMage = defMageSnap.exists() ? (defMageSnap.data() as any) : null;
+      const mageWasOnTile = !!defMage && String(defMage.tileId ?? "") === String(tileId);
+
+      // attacker deployment ref (place +1 new cav)
+      const attDepRef = doc(db, "games", gameId, "deployments", bbActorId, "tiles", tileId);
+      const attDepSnap = await tx.get(attDepRef);
+      const attDep = (attDepSnap.exists() ? (attDepSnap.data() as any) : {}) as any;
+
+      const beforeAtt = {
+        foot: Number(attDep.foot ?? 0),
+        cav: Number(attDep.cav ?? 0),
+        arch: Number(attDep.arch ?? 0),
+      };
+
+      // log ref
+      const logRef = doc(collection(db, "games", gameId, "battleLog"));
+
+      // ===== WRITES =====
+
+      // 1) tile ownership -> actor
+      tx.update(tileRef, { ownerPlayerId: bbActorId });
+
+      // 2) wipe defender troops on that tile
+      tx.set(defDepRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+
+      // 3) delete defender mage if it was on that tile
+      if (mageWasOnTile) {
+        tx.delete(defMageRef);
+      }
+
+      // 4) add +1 cav to actor on that tile (free cav, not from stock)
+      tx.set(
+        attDepRef,
+        {
+          foot: beforeAtt.foot,
+          cav: beforeAtt.cav + 1,
+          arch: beforeAtt.arch,
+        },
+        { merge: true }
+      );
+
+      // 5) log event
+      tx.set(
+        logRef,
+        {
+          createdAt: serverTimestamp(),
+          type: "BAMBOOZLE_TAKEOVER_TILE",
+          actorId: bbActorId,
+          tileId,
+          oldOwnerId: curOwner,
+          defenderBefore: beforeDef,
+          attackerBefore: beforeAtt,
+          attackerAfter: { ...beforeAtt, cav: beforeAtt.cav + 1 },
+          defenderMageDestroyed: mageWasOnTile,
+        },
+        { merge: true }
+      );
+    });
+
+    alert(`🎴 Tile #${bbTargetTileId} taken over: +1 cav placed.`);
+    setBbTargetTileId("");
+  } catch (err: any) {
+    console.error(err);
+    alert(`❌ ${err?.message ?? String(err)}`);
+  }
+}
+
+
+async function resetGame() {
+  const ok = confirm(
+    "RESET GAME?\n\nDit wist:\n- battleLog\n- deployments (alle troops)\n- tile ownership (behalve basecamps)\n\nDoorgaan?"
+  );
+  if (!ok) return;
+
+  // extra confirm
+  const ok2 = confirm("Laatste bevestiging: echt resetten?");
+  if (!ok2) return;
+
+  // 1) load data we need
+  const tilesSnap = await getDocs(collection(db, "games", gameId, "tiles"));
+  const playersSnap = await getDocs(collection(db, "games", gameId, "players"));
+  const battleSnap = await getDocs(collection(db, "games", gameId, "battleLog"));
+  const bankSnap = await getDocs(collection(db, "games", gameId, "bankLog"));
+
+
+  const ops: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
+
+  // 2) clear battle log
+  battleSnap.docs.forEach((d) => {
+    ops.push((batch) => batch.delete(d.ref));
+  });
+
+  // 2b) clear bank log
+bankSnap.docs.forEach((d) => {
+  ops.push((batch) => batch.delete(d.ref));
+});
+
+
+  // 3) reset tiles ownership (keep basecamps owned by their basecamp owner)
+  tilesSnap.docs.forEach((d) => {
+    const t = d.data() as any;
+    const isBasecamp = !!t.isBasecamp;
+    const basecampOwner = t.basecampOwnerPlayerId ?? null;
+
+    const nextOwner = isBasecamp ? basecampOwner : null;
+
+    ops.push((batch) =>
+      batch.update(d.ref, {
+        ownerPlayerId: nextOwner,
+      })
+    );
+  });
+
+  // 4) clear deployments subcollections for every player
+  // deployments/{playerId}/tiles/* delete
+  for (const p of playersSnap.docs) {
+    const pid = p.id;
+    const depSnap = await getDocs(collection(db, "games", gameId, "deployments", pid, "tiles"));
+    depSnap.docs.forEach((dd) => {
+      ops.push((batch) => batch.delete(dd.ref));
+    });
+
+    // 5) unlock player start status (optional but handy for re-testing)
+    ops.push((batch) =>
+      batch.update(p.ref, {
+        startReady: false,
+        startReadyAt: deleteField(),
+      })
+    );
+  }
+
+  // 6) reset game startClaim to inactive (optional)
+  // (setDoc outside batch is fine; or add to ops via batch.set on doc ref)
+  const gameRef = doc(db, "games", gameId);
+  ops.push((batch) =>
+    batch.set(
+      gameRef,
+      {
+        startClaim: { active: false },
+      },
+      { merge: true }
+    )
+  );
+
+  // 7) commit in safe chunks
+  await commitBatches(ops, 450);
+
+  alert("✅ Game reset done (battleLog cleared, deployments cleared, tiles reset).");
+}
+
+const ui = {
+  page: {
+    minHeight: "100vh",
+    padding: 20,
+    background: "radial-gradient(1200px 700px at 50% 10%, #2a2218 0%, #14110c 55%, #0e0c08 100%)",
+    color: "#f3e7cf",
+    fontFamily: "var(--font-geist-sans), system-ui, sans-serif",
+  } as const,
+  header: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    padding: "14px 16px",
+    borderRadius: 14,
+    border: "1px solid rgba(243,231,207,0.18)",
+    background: "rgba(20,16,11,0.65)",
+    backdropFilter: "blur(6px)",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
+  } as const,
+  title: {
+    fontFamily: "var(--font-cinzel), serif",
+    letterSpacing: 2,
+    fontSize: 26,
+    margin: 0,
+    lineHeight: 1,
+  } as const,
+  chipRow: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" } as const,
+  chip: {
+    fontSize: 12,
+    padding: "6px 10px",
+    borderRadius: 999,
+    border: "1px solid rgba(243,231,207,0.18)",
+    background: "rgba(243,231,207,0.06)",
+  } as const,
+  grid: {
+    marginTop: 14,
+    display: "grid",
+    gridTemplateColumns: "minmax(520px, 1.7fr) minmax(340px, 1fr)",
+    gap: 14,
+    alignItems: "start",
+  } as const,
+  card: {
+    borderRadius: 14,
+    border: "1px solid rgba(243,231,207,0.16)",
+    background: "rgba(20,16,11,0.55)",
+    backdropFilter: "blur(6px)",
+    boxShadow: "0 10px 26px rgba(0,0,0,0.25)",
+    padding: 14,
+  } as const,
+  cardTitle: {
+    margin: "0 0 10px 0",
+    fontFamily: "var(--font-cinzel), serif",
+    letterSpacing: 1,
+    fontSize: 16,
+    opacity: 0.95,
+  } as const,
+  button: {
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid rgba(243,231,207,0.22)",
+    background: "rgba(243,231,207,0.07)",
+    color: "#f3e7cf",
+    cursor: "pointer",
+  } as const,
+  buttonDanger: {
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid rgba(255,140,140,0.35)",
+    background: "rgba(255,140,140,0.10)",
+    color: "#ffd7d7",
+    cursor: "pointer",
+  } as const,
+};
+
+// UI block
+return (
+  <main style={ui.page}>
+    {/* ===== Header ===== */}
+    <div style={ui.header}>
+      <div>
+        <h1 style={ui.title}>HORGOTH — Host</h1>
+        <div style={ui.subTitle}>Game ID: {gameId}</div>
+      </div>
+
+      <div style={ui.headerRight}>
+        <div style={ui.pill}>
+          Start phase: <strong>{startActive ? "ACTIVE" : "INACTIVE"}</strong>
+        </div>
+        <div style={ui.pill}>
+          Time left: <strong>{timeLeftSec === null ? "-" : `${timeLeftSec}s`}</strong>
+        </div>
+      </div>
+    </div>
+
+    {/* ===== Main grid ===== */}
+    <div style={ui.grid}>
+      {/* ================= LEFT: Map + Logs ================= */}
+      <div style={{ display: "grid", gap: 14 }}>
+        {/* Winter barometer ABOVE map */}
+        <div style={ui.card}>
+          <div style={ui.cardTitle}>❄️ Winter is Coming</div>
+
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <div>
+              Level: <strong>{winterLevel}</strong> / 10
+            </div>
+
+            <div style={{ flex: "1 1 280px" }}>
+              <div
+                style={{
+                  height: 14,
+                  borderRadius: 999,
+                  border: "1px solid rgba(243,231,207,0.22)",
+                  overflow: "hidden",
+                  background: "rgba(243,231,207,0.08)",
+                }}
+              >
+                <div
+                  style={{
+                    height: "100%",
+                    width: `${(winterLevel / 10) * 100}%`,
+                    background: "rgba(243,231,207,0.75)",
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => setWinterLevelInGame(winterLevel + 1)} style={ui.button}>
+              +1
+            </button>
+            <button onClick={() => setWinterLevelInGame(winterLevel - 1)} style={ui.button}>
+              −1
+            </button>
+            <button onClick={() => setWinterLevelInGame(0)} style={ui.buttonGhost}>
+              Reset to 0
+            </button>
+
+            <button
+              onClick={triggerFrostGiantsAttack}
+              disabled={winterLevel < 10}
+              style={{
+                ...ui.button,
+                opacity: winterLevel < 10 ? 0.6 : 1,
+                cursor: winterLevel < 10 ? "not-allowed" : "pointer",
+              }}
+              title={winterLevel < 10 ? "Winter level must be 10 to trigger" : "Trigger attack"}
+            >
+              ❄️ Trigger Frost Giants Attack (needs 10)
+            </button>
+          </div>
+
+          <div style={ui.helpText}>
+            Attack targets 15 random <strong>non-basecamp</strong> tiles. Dragonglass blocks the attack but is
+            consumed. Without dragonglass: troops lose <strong>50% (rounded up loss)</strong> per type.
+          </div>
+        </div>
+
+        {/* Map */}
+        <div style={ui.card}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={ui.cardTitle}>🗺️ World Map</div>
+
+            {/* Zoom controls */}
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button type="button" onClick={() => zoomBy(-0.1)} style={ui.buttonGhost}>−</button>
+              <div style={{ ...ui.pill, padding: "6px 10px" }}>
+                Zoom: <strong>{Math.round(mapZoom * 100)}%</strong>
+              </div>
+              <button type="button" onClick={() => zoomBy(+0.1)} style={ui.buttonGhost}>+</button>
+              <button type="button" onClick={resetView} style={ui.buttonGhost}>Reset</button>
+            </div>
+          </div>
+
+          {/* Viewport: ONLY the map zooms, not the rest */}
+          <div
+              onWheel={onWheelZoom}
+              onMouseDown={onPanStart}
+              onMouseMove={onPanMove}
+              onMouseUp={onPanEnd}
+              onMouseLeave={onPanEnd}
+              style={{
+                marginTop: 10,
+                borderRadius: 12,
+                border: "1px solid rgba(243,231,207,0.12)",
+                overflow: "hidden",
+                background: "rgba(0,0,0,0.15)",
+                height: 640,
+                position: "relative",
+                touchAction: "none",
+                cursor: isPanningRef.current ? "grabbing" : "grab",
+                userSelect: "none",
+              }}
+            >
+
+            <div
+              style={{
+                transform: `translate(${mapPan.x}px, ${mapPan.y}px) scale(${mapZoom})`,
+                transformOrigin: "50% 50%",
+                width: "100%",
+                height: "100%",
+              }}
+            >
+              <MapSvg
+                tiles={tiles}
+                tileTroops={tileTroops}
+                colorForPlayer={colorForPlayer}
+                mageByTile={mageByTile}
+                selectedTileId={selectedTileId}
+                onSelectTile={(id) => setSelectedTileId(id)}
+              />
+            </div>
+          </div>
+
+        
+
+
+        {/* Legend (moved under map) */}
+          <div style={ui.card}>
+            <div style={ui.cardTitle}>Legend</div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {players.map((p) => {
+                const bg = colorForPlayer(p.id);
+                return (
+                  <div key={p.id} style={ui.legendPill}>
+                    <span style={{ ...ui.legendSwatch, background: bg }} />
+                    <span style={{ fontSize: 13 }}>
+                      {p.avatar} {p.name}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          </div>
+
+        {/* Logs under map (left-bottom) */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          {/* Bank log */}
+          <div style={ui.card}>
+            <div style={ui.cardTitle}>🏦 Bank transactions (last 20)</div>
+
+            {bankLog.length === 0 ? (
+              <div style={{ opacity: 0.75 }}>No bank transactions yet.</div>
+            ) : (
+              <ol style={{ margin: 0, paddingLeft: 18 }}>
+                {bankLog.map((e) => {
+                  const who = nameFor(e.playerId);
+                  const type = String((e as any).type ?? "");
+
+                  // EXP ADJUST: toon exp i.p.v. credits
+                  if (type === "EXP_ADJUST") {
+                    const unitType = String((e as any).unitType ?? "");
+                    const icon =
+                      unitType === "foot" ? "🗡️" : unitType === "cav" ? "🐎" : unitType === "arch" ? "🏹" : "⭐";
+
+                    const delta = Number((e as any).delta ?? 0);
+                    const from = Number((e as any).from ?? 0);
+                    const to = Number((e as any).to ?? 0);
+
+                    return (
+                      <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                        <strong>{who}</strong>: EXP {icon} {delta > 0 ? "+" : ""}
+                        {delta} ({from} → {to})
+                      </li>
+                    );
+                  }
+
+                  const delta = Number(e.delta ?? 0);
+                  const from = Number(e.from ?? 0);
+                  const to = Number(e.to ?? 0);
+                  const sign = delta > 0 ? "+" : "";
+                  const action = delta > 0 ? "added" : "removed";
+
+                  return (
+                    <li key={e.id} style={{ marginBottom: 6 }}>
+                      <strong>{who}</strong> {action} {sign}
+                      {delta} credits ({from} → {to})
+                    </li>
+                  );
+                })}
+              </ol>
+            )}
+          </div>
+
+          {/* Tile log */}
+          <div style={ui.card}>
+            <div style={ui.cardTitle}>📜 Last 10 tile changes</div>
+
+            {battleLog.length === 0 ? (
+              <div style={{ opacity: 0.75 }}>No events yet.</div>
+            ) : (
+              <ol style={{ margin: 0, paddingLeft: 18 }}>
+                {battleLog.map((e) => {
+                  let text = "";
+
+                  if (e.type === "CONQUER") {
+                    text = `Tile #${e.tileId}: ${nameFor(e.newOwnerId)} conquered neutral land`;
+                  } else if (e.type === "RELEASE") {
+                    text = `Tile #${e.tileId}: ${nameFor(e.oldOwnerId)} left it empty → neutral`;
+                  } else if (e.type === "ATTACKER_WIN") {
+                    const ap = Number(e.attackerPower ?? 0);
+                    const dp = Number(e.defenderPower ?? 0);
+                    const df = Number(e.diff ?? ap - dp);
+                    text = `Tile #${e.tileId}: ${nameFor(e.attackerId)} conquered from ${nameFor(
+                      e.defenderId
+                    )} (score ${ap.toFixed(2)} vs ${dp.toFixed(2)}, diff ${df.toFixed(2)})`;
+                  } else if (e.type === "DEFENDER_HOLD") {
+                    const ap = Number(e.attackerPower ?? 0);
+                    const dp = Number(e.defenderPower ?? 0);
+                    const df = Number(e.diff ?? ap - dp);
+                    text = `Tile #${e.tileId}: ${nameFor(e.defenderId)} held vs ${nameFor(
+                      e.attackerId
+                    )} (score ${ap.toFixed(2)} vs ${dp.toFixed(2)}, diff ${df.toFixed(2)})`;
+                  } else if (e.type === "DRAW") {
+                    const ap = Number(e.attackerPower ?? 0);
+                    const dp = Number(e.defenderPower ?? 0);
+                    const df = Number(e.diff ?? ap - dp);
+                    text = `Tile #${e.tileId}: draw (${nameFor(e.attackerId)} vs ${nameFor(
+                      e.defenderId
+                    )}) (score ${ap.toFixed(2)} vs ${dp.toFixed(2)}, diff ${df.toFixed(2)}) → neutral`;
+                  } else if (e.type === "BAMBOOZLE_DESTROY_TROOPS") {
+                    const k = e.kill ?? {};
+                    text = `🎴 Troops destroyed on tile #${e.tileId} of ${nameFor(e.victimId)} (🗡️${k.foot ?? 0} 🐎${
+                      k.cav ?? 0
+                    } 🏹${k.arch ?? 0})`;
+                  } else if (e.type === "BAMBOOZLE_TAKEOVER_TILE") {
+                    const tileId = String(e.tileId ?? "");
+                    const actor = nameFor(e.actorId);
+                    const oldOwner = nameFor(e.oldOwnerId);
+                    const mageKilled = !!e.defenderMageDestroyed;
+                    text = `🎴 Tile #${tileId}: ${actor} took over from ${oldOwner} (+1 🐎 cav, enemy troops wiped${
+                      mageKilled ? ", mage destroyed" : ""
+                    })`;
+                  } else if (e.type === "FROST_GIANTS_ATTACK") {
+                    const ids = Array.isArray((e as any).attackedTileIds) ? (e as any).attackedTileIds : [];
+                    const results = Array.isArray((e as any).results) ? (e as any).results : [];
+
+                    const dgUsed = results.filter((r: any) => r?.dragonglassConsumed).length;
+                    const hitOwned = results.filter((r: any) => r?.ownerId).length;
+
+                    text =
+                      `❄️ Frost Giants attacked ${ids.length || hitOwned} tiles` +
+                      (dgUsed ? ` — 🧪 Dragonglass used: ${dgUsed}` : "") +
+                      (ids.length ? `: ${ids.map((id: any) => `#${id}`).join(", ")}` : "");
+                  } else {
+                    text = `Event on tile #${(e as any).tileId ?? "?"}`;
+                  }
+
+                  return <li key={e.id} style={{ marginBottom: 6 }}>{text}</li>;
+                })}
+              </ol>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ================= RIGHT: Controls + Ranking + Bamboozle ================= */}
+      <div style={{ display: "grid", gap: 14 }}>
+        {/* Ranking */}
+        <div style={ui.card}>
+          <div style={ui.cardTitle}>🏆 Ranking ({players.length})</div>
+
+          {rankedPlayers.length === 0 ? (
+            <div style={{ opacity: 0.75 }}>No players yet.</div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
+                <thead>
+                  <tr>
+                    <th style={ui.thLeft}>#</th>
+                    <th style={ui.thLeft}>Player</th>
+                    <th style={ui.thRight}>Dominance</th>
+                    <th style={ui.thRight}>Credits</th>
+                    <th style={ui.thRight}>🐎</th>
+                    <th style={ui.thRight}>🏹</th>
+                    <th style={ui.thRight}>🗡️</th>
+                    <th style={ui.thRight}>🍺</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rankedPlayers.map((p, idx) => (
+                    <tr key={p.id}>
+                      <td style={ui.tdLeft}>{idx + 1}</td>
+                      <td style={ui.tdLeft}>
+                        <strong>
+                          {p.avatar} {p.name}
+                        </strong>
+                      </td>
+                      <td style={ui.tdRight}>{p.dominance.toFixed(1)}%</td>
+                      <td style={ui.tdRight}>{Number(p.credits ?? 0)}</td>
+                      <td style={ui.tdRight}>{Number(p.u?.cav ?? 0)}</td>
+                      <td style={ui.tdRight}>{Number(p.u?.arch ?? 0)}</td>
+                      <td style={ui.tdRight}>{Number(p.u?.foot ?? 0)}</td>
+                      <td style={ui.tdRight}>{Number((p as any).beerCount ?? 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Bamboozle — Destroy Troops */}
+        <div style={ui.card}>
+          <div style={ui.cardTitle}>🎴 Bamboozle — Destroy Troops</div>
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <select
+              value={bbVictimPlayerId}
+              onChange={(e) => setBbVictimPlayerId(e.target.value)}
+              style={ui.select}
+            >
+              <option value="">— choose player —</option>
+              {players.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.avatar} {p.name}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={bbVictimTileId}
+              onChange={(e) => setBbVictimTileId(e.target.value)}
+              disabled={!bbVictimPlayerId}
+              style={{ ...ui.select, opacity: !bbVictimPlayerId ? 0.6 : 1 }}
+            >
+              <option value="">— choose tile (with troops) —</option>
+              {bbVictimTilesWithTroops.map((t) => (
+                <option key={t.tileId} value={t.tileId}>
+                  #{t.tileId} (🗡️{t.foot} 🐎{t.cav} 🏹{t.arch})
+                </option>
+              ))}
+            </select>
+
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <label style={ui.miniLabel}>
+                🗡️
+                <input
+                  type="number"
+                  min={0}
+                  value={bbKillFoot}
+                  onChange={(e) => setBbKillFoot(Math.max(0, Number(e.target.value)))}
+                  style={ui.miniInput}
+                />
+              </label>
+
+              <label style={ui.miniLabel}>
+                🐎
+                <input
+                  type="number"
+                  min={0}
+                  value={bbKillCav}
+                  onChange={(e) => setBbKillCav(Math.max(0, Number(e.target.value)))}
+                  style={ui.miniInput}
+                />
+              </label>
+
+              <label style={ui.miniLabel}>
+                🏹
+                <input
+                  type="number"
+                  min={0}
+                  value={bbKillArch}
+                  onChange={(e) => setBbKillArch(Math.max(0, Number(e.target.value)))}
+                  style={ui.miniInput}
+                />
+              </label>
+            </div>
+
+            <button
+              onClick={bamboozleDestroyTroops}
+              disabled={!bbVictimPlayerId || !bbVictimTileId}
+              style={{
+                ...ui.button,
+                opacity: !bbVictimPlayerId || !bbVictimTileId ? 0.6 : 1,
+                cursor: !bbVictimPlayerId || !bbVictimTileId ? "not-allowed" : "pointer",
+              }}
+            >
+              🎴 Destroy troops
+            </button>
+          </div>
+
+          <div style={ui.helpText}>
+            If the tile ends up with <strong>0 troops</strong>, it becomes <strong>neutral</strong>. If the victim’s
+            Mage was on that tile, it is destroyed as well.
+          </div>
+        </div>
+
+        {/* Bamboozle — Take over enemy tile */}
+        <div style={ui.card}>
+          <div style={ui.cardTitle}>🎴 Bamboozle — Take over enemy tile</div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            <label style={ui.label}>
+              Actor (who plays the card)
+              <select
+                value={bbActorId}
+                onChange={(e) => {
+                  setBbActorId(e.target.value);
+                  setBbTargetTileId("");
+                }}
+                style={ui.selectFull}
+              >
+                <option value="">— choose player —</option>
+                {players.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.avatar} {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label style={ui.label}>
+              Target tile (owned by someone else, non-basecamp)
+              <select
+                value={bbTargetTileId}
+                onChange={(e) => setBbTargetTileId(e.target.value)}
+                disabled={!bbActorId}
+                style={{ ...ui.selectFull, opacity: !bbActorId ? 0.6 : 1 }}
+              >
+                <option value="">— choose tile —</option>
+                {occupiedEnemyTiles(bbActorId).map((t) => (
+                  <option key={t.id} value={t.id}>
+                    #{t.id} — owner: {nameFor(t.ownerPlayerId)}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <button
+              onClick={bamboozleTakeOverEnemyTile}
+              disabled={!bbActorId || !bbTargetTileId}
+              style={{
+                ...ui.button,
+                opacity: !bbActorId || !bbTargetTileId ? 0.6 : 1,
+                cursor: !bbActorId || !bbTargetTileId ? "not-allowed" : "pointer",
+                width: "fit-content",
+              }}
+            >
+              🎴 Execute takeover (+1 🐎 cav)
+            </button>
+
+            <div style={ui.helpText}>
+              This destroys all troops on the target tile, destroys the defender mage if it was on that tile, sets the
+              tile owner to the actor, and places <strong>+1 free cavalry</strong> for the actor.
+            </div>
+          </div>
+        </div>
+
+        {/* ✅ Combined card: Destroy Mage OR Dragonglass (independent) */}
+        <div style={ui.card}>
+          <div style={ui.cardTitle}>🎴 Bamboozle — Destroy Mage or Dragonglass</div>
+
+          <div style={{ display: "grid", gap: 12 }}>
+            {/* Destroy Mage */}
+            <div style={ui.subBox}>
+              <div style={ui.subBoxTitle}>🧙 Destroy Mage</div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <select
+                  value={selectedMageVictim}
+                  onChange={(e) => setSelectedMageVictim(e.target.value)}
+                  style={ui.selectFull}
+                >
+                  <option value="">— choose player with Mage —</option>
+                  {mageTargets.map((pid) => {
+                    const p = players.find((x) => x.id === pid);
+                    const tileId = magesByPlayer[pid]?.tileId;
+                    return (
+                      <option key={pid} value={pid}>
+                        🧙✅ {p?.avatar ?? ""} {p?.name ?? pid} (tile #{tileId})
+                      </option>
+                    );
+                  })}
+                </select>
+
+                <button
+                  onClick={() => bamboozleDestroyMage(selectedMageVictim)}
+                  disabled={!selectedMageVictim}
+                  style={{
+                    ...ui.button,
+                    opacity: !selectedMageVictim ? 0.6 : 1,
+                    cursor: !selectedMageVictim ? "not-allowed" : "pointer",
+                  }}
+                >
+                  🎴 Destroy Mage
+                </button>
+              </div>
+
+              <div style={ui.helpText}>Only players who currently own a Mage appear in the list.</div>
+            </div>
+
+            {/* Destroy Dragonglass */}
+            <div style={ui.subBox}>
+              <div style={ui.subBoxTitle}>🔷 Destroy Dragonglass</div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <select
+                  value={dgTargetPlayerId}
+                  onChange={(e) => setDgTargetPlayerId(e.target.value)}
+                  style={ui.selectFull}
+                >
+                  <option value="">— choose player —</option>
+                  {players
+                    .filter((p) => !!(p as any).hasDragonglass)
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        🔷✅ {p.avatar} {p.name}
+                      </option>
+                    ))}
+                </select>
+
+                <button
+                  onClick={bamboozleDestroyDragonglass}
+                  disabled={!dgTargetPlayerId}
+                  style={{
+                    ...ui.button,
+                    opacity: !dgTargetPlayerId ? 0.6 : 1,
+                    cursor: !dgTargetPlayerId ? "not-allowed" : "pointer",
+                  }}
+                >
+                  🎴 Destroy Dragonglass
+                </button>
+              </div>
+
+              <div style={ui.helpText}>Host chooses a player. Their Dragonglass is removed immediately.</div>
+            </div>
+          </div>
+        </div>
+
+        
+      </div>
+    </div>
+
+    {/* ===== Bottom: Host controls (moved down) + Pregame under it ===== */}
+    <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
+      {/* Host controls */}
+      <div style={ui.card}>
+        <div style={ui.cardTitle}>🧰 Host controls</div>
+
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <button onClick={initTiles} style={ui.button}>
+            Initialize tiles (60)
+          </button>
+
+          <button onClick={assignBasecamps} style={ui.button}>
+            Assign basecamps (spread)
+          </button>
+
+          <button onClick={startStartTimer} style={ui.button}>
+            Start 2-min timer
+          </button>
+
+          <button onClick={finalizeStartAndFillRemainder} style={ui.button}>
+            Finalize start + fill remainder
+          </button>
+
+          <button onClick={lockStartNow} style={ui.button}>
+            Lock start now
+          </button>
+
+          <button onClick={resetGame} style={ui.buttonDanger}>
+            Reset game (clear troops + log)
+          </button>
+        </div>
+      </div>
+
+      {/* Pregame setup moved below controls */}
+      <div style={ui.card}>
+        <div style={ui.cardTitle}>⚙️ Pregame setup</div>
+        <div style={ui.helpText}>Vul hier de start credits/troepen/EXP in op basis van de pregame.</div>
+
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+          <button onClick={savePregameSetup} style={ui.button}>
+            Save pregame setup
+          </button>
+        </div>
+
+        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+          {players.map((p) => {
+            const d = draft[p.id] ?? {
+              credits: 0,
+              foot: 0,
+              cav: 0,
+              arch: 0,
+              expFoot: 0,
+              expCav: 0,
+              expArch: 0,
+            };
+
+            return (
+              <div key={p.id} style={ui.playerCard}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <strong>
+                    {p.avatar} {p.name}
+                  </strong>
+                  <span style={{ opacity: 0.8, fontSize: 12 }}>Player ID: {p.id}</span>
+                </div>
+
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+                  <label style={ui.smallLabel}>
+                    Credits
+                    <input
+                      type="number"
+                      value={d.credits}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          [p.id]: { ...prev[p.id], credits: Number(e.target.value) },
+                        }))
+                      }
+                      style={ui.smallInput}
+                    />
+                  </label>
+
+                  <label style={ui.smallLabel}>
+                    Foot
+                    <input
+                      type="number"
+                      value={d.foot}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          [p.id]: { ...prev[p.id], foot: Number(e.target.value) },
+                        }))
+                      }
+                      style={ui.smallInput}
+                    />
+                  </label>
+
+                  <label style={ui.smallLabel}>
+                    Cav
+                    <input
+                      type="number"
+                      value={d.cav}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          [p.id]: { ...prev[p.id], cav: Number(e.target.value) },
+                        }))
+                      }
+                      style={ui.smallInput}
+                    />
+                  </label>
+
+                  <label style={ui.smallLabel}>
+                    Arch
+                    <input
+                      type="number"
+                      value={d.arch}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          [p.id]: { ...prev[p.id], arch: Number(e.target.value) },
+                        }))
+                      }
+                      style={ui.smallInput}
+                    />
+                  </label>
+
+                  <label style={ui.smallLabel}>
+                    EXP Foot
+                    <input
+                      type="number"
+                      min={0}
+                      value={d.expFoot}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          [p.id]: { ...prev[p.id], expFoot: Math.max(0, Number(e.target.value)) },
+                        }))
+                      }
+                      style={ui.smallInput}
+                    />
+                  </label>
+
+                  <label style={ui.smallLabel}>
+                    EXP Cav
+                    <input
+                      type="number"
+                      min={0}
+                      value={d.expCav}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          [p.id]: { ...prev[p.id], expCav: Math.max(0, Number(e.target.value)) },
+                        }))
+                      }
+                      style={ui.smallInput}
+                    />
+                  </label>
+
+                  <label style={ui.smallLabel}>
+                    EXP Arch
+                    <input
+                      type="number"
+                      min={0}
+                      value={d.expArch}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          [p.id]: { ...prev[p.id], expArch: Math.max(0, Number(e.target.value)) },
+                        }))
+                      }
+                      style={ui.smallInput}
+                    />
+                  </label>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  </main>
+);
+}
