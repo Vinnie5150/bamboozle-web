@@ -182,29 +182,30 @@ export default function PlayPage() {
     []
   );
 
-  // ====== HEX adjacency (correct for your map) ======
+  // ====== HEX adjacency (single source of truth) ======
 const ALL_TILE_IDS = useMemo(() => {
-  // use tiles if loaded, else fallback to 0..59
+  // Use loaded tiles when available; fallback to 0..59 to avoid "empty neighbor list" during first render.
   if (tiles?.length) return tiles.map((t) => String(t.id));
   return Array.from({ length: 60 }, (_, i) => String(i));
 }, [tiles]);
-
-function neighbors(fromId: string) {
-  if (!fromId) return [];
-  // return only the true hex-adjacent neighbors
-  return ALL_TILE_IDS.filter((toId) => toId !== fromId && isNeighbor(String(fromId), String(toId)));
-}
 
 function isAdjacent(fromId: string, toId: string) {
   if (!fromId || !toId) return false;
   return isNeighbor(String(fromId), String(toId));
 }
+
 function neighborIds(fromId: string) {
   const from = String(fromId);
-  return tiles
-    .map((t) => String(t.id))
-    .filter((to) => to !== from && isNeighbor(from, to));
+  return ALL_TILE_IDS.filter((to) => to !== from && isNeighbor(from, to));
 }
+
+// handy sets (prevents any "random" selection: only allowed ids pass)
+const moveToAllowedSet = useMemo(() => {
+  if (!fromTileId) return new Set<string>();
+  return new Set(neighborIds(fromTileId));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [fromTileId, ALL_TILE_IDS]);
+
 
 useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -421,35 +422,47 @@ useEffect(() => {
   const fromTroops = deployments[fromTileId] ?? { foot: 0, cav: 0, arch: 0 };
 
  const highlightTileIds = useMemo(() => {
-  // MOVE: highlight neighbors van fromTileId
+  // Map highlights are purely UI: selection rules are enforced in onSelectTile + moveTroops().
   if (mapAction === "MOVE") {
-    if (!fromTileId) return [];
-    return tiles
-  .map((t) => String(t.id))
-  .filter((to) => to !== String(fromTileId) && isNeighbor(String(fromTileId), to));
+    // When choosing FROM: highlight your tiles (optional, makes UX clearer)
+    if (mapPickMode === "FROM") {
+      return ownedTileIds.map(String);
+    }
+
+    // When choosing TO: highlight ONLY true adjacent neighbors
+    if (mapPickMode === "TO" && fromTileId) {
+      return neighborIds(fromTileId);
+    }
+
+    return [];
   }
 
-  // TP: highlight neighbors van tpFromTileId (of alles, afhankelijk van jouw teleport rules)
+  // TELEPORT
   if (mapAction === "TP") {
-    if (!tpFromTileId) return [];
-    return neighbors(Number(tpFromTileId)); // als teleport enkel adjacent mage move is
-    // Als teleport "any tile" mag: return Array.from({length:60},(_,i)=>String(i));
+    if (tpPickMode === "TP_FROM") {
+      return ownedTileIds.map(String);
+    }
+
+    // TP_TO: your rules say "any tile, no basecamps"
+    if (tpPickMode === "TP_TO") {
+      return tiles.filter((t) => !t.isBasecamp).map((t) => String(t.id));
+    }
+
+    return [];
   }
 
   return [];
-}, [mapAction, fromTileId, tpFromTileId]);
+}, [mapAction, mapPickMode, tpPickMode, fromTileId, ownedTileIds, tiles]);
+
 
 
  
  const toOptions = useMemo(() => {
   if (!fromTileId) return [];
-  const from = String(fromTileId);
+  return neighborIds(fromTileId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [fromTileId, ALL_TILE_IDS]);
 
-  // ✅ echte hex-adjacent tiles volgens tileLayout.isNeighbor()
-  return tiles
-    .map((t) => String(t.id))
-    .filter((to) => to !== from && isNeighbor(from, to));
-}, [fromTileId, tiles]);
 
 
     
@@ -2133,7 +2146,8 @@ return (
           mageByTile={mageByTile as any}
           selectedTileId={selectedTileId}
           highlightTileIds={highlightTileIds}
-          onSelectTile={(id) => {
+          onSelectTile={(rawId) => {
+            const id = String(rawId);
             setSelectedTileId(id);
 
             // ====== MOVE flow ======
@@ -2144,30 +2158,34 @@ return (
                   return;
                 }
                 setFromTileId(id);
+                setToTileId("");
                 setStatus(`✅ FROM gekozen: tile #${id}. Kies nu je TO.`);
                 setMapPickMode("TO");
                 return;
               }
 
-              if (mapPickMode === "TO") {
-                if (!fromTileId) {
-                  setStatus("❌ Kies eerst een FROM tile.");
-                  setMapPickMode("FROM");
-                  return;
-                }
-                if (id === fromTileId) {
-                  setToTileId("");
-                  setStatus("↩️ TO gereset. Kies opnieuw je bestemming.");
-                  return;
-                }
-                if (!isAdjacent(fromTileId, id)) {
-                  setStatus(`❌ Tile #${id} is niet adjacent aan FROM #${fromTileId}.`);
-                  return;
-                }
-                setToTileId(id);
-                setStatus(`✅ TO gekozen: tile #${id}. Klaar om te bewegen.`);
+              // mapPickMode === "TO"
+              if (!fromTileId) {
+                setStatus("❌ Kies eerst een FROM tile.");
+                setMapPickMode("FROM");
                 return;
               }
+
+              if (id === String(fromTileId)) {
+                setToTileId("");
+                setStatus("↩️ TO gereset. Kies opnieuw je bestemming.");
+                return;
+              }
+
+              // ✅ hard gate: ONLY adjacent tiles are selectable as TO
+              if (!moveToAllowedSet.has(id)) {
+                setStatus(`❌ Tile #${id} is niet adjacent aan FROM #${fromTileId}.`);
+                return;
+              }
+
+              setToTileId(id);
+              setStatus(`✅ TO gekozen: tile #${id}. Klaar om te bewegen.`);
+              return;
             }
 
             // ====== TELEPORT flow ======
@@ -2178,28 +2196,34 @@ return (
                   return;
                 }
                 setTpFromTileId(id);
+                setTpToTileId("");
                 setStatus(`✅ TP FROM gekozen: tile #${id}. Kies nu TP TO.`);
                 setTpPickMode("TP_TO");
                 return;
               }
 
-              if (tpPickMode === "TP_TO") {
-                if (!tpFromTileId) {
-                  setStatus("❌ Kies eerst een TP FROM tile.");
-                  setTpPickMode("TP_FROM");
-                  return;
-                }
-
-                if (id === tpFromTileId) {
-                  setTpToTileId("");
-                  setStatus("↩️ TP TO gereset. Kies opnieuw je bestemming.");
-                  return;
-                }
-
-                setTpToTileId(id);
-                setStatus(`✅ TP TO gekozen: tile #${id}. Klaar om te teleporteren.`);
+              // tpPickMode === "TP_TO"
+              if (!tpFromTileId) {
+                setStatus("❌ Kies eerst een TP FROM tile.");
+                setTpPickMode("TP_FROM");
                 return;
               }
+
+              if (id === String(tpFromTileId)) {
+                setTpToTileId("");
+                setStatus("↩️ TP TO gereset. Kies opnieuw je bestemming.");
+                return;
+              }
+
+              const t = tiles.find((x) => String(x.id) === id);
+              if (t?.isBasecamp) {
+                setStatus("❌ Teleport TO mag geen basecamp zijn.");
+                return;
+              }
+
+              setTpToTileId(id);
+              setStatus(`✅ TP TO gekozen: tile #${id}. Klaar om te teleporteren.`);
+              return;
             }
           }}
         />
