@@ -182,29 +182,24 @@ export default function PlayPage() {
     []
   );
 
-  // ====== GRID adjacency (10x6) ======
-  function isNeighbors(tileId: number) {
-    const cols = 10;
-    const rows = 6;
-    const x = tileId % cols;
-    const y = Math.floor(tileId / cols);
+  // ====== HEX adjacency (correct for your map) ======
+const ALL_TILE_IDS = useMemo(() => {
+  // use tiles if loaded, else fallback to 0..59
+  if (tiles?.length) return tiles.map((t) => String(t.id));
+  return Array.from({ length: 60 }, (_, i) => String(i));
+}, [tiles]);
 
-    const n: number[] = [];
-    if (x > 0) n.push(tileId - 1);
-    if (x < cols - 1) n.push(tileId + 1);
-    if (y > 0) n.push(tileId - cols);
-    if (y < rows - 1) n.push(tileId + cols);
-    return n.map(String);
-  }
+function neighbors(fromId: string) {
+  if (!fromId) return [];
+  // return only the true hex-adjacent neighbors
+  return ALL_TILE_IDS.filter((toId) => toId !== fromId && isNeighbor(String(fromId), String(toId)));
+}
 
-  function neighbors(tileId: number) {
-    return isNeighbors(tileId);
-  }
-
-  function isAdjacent(fromId: string, toId: string) {
+function isAdjacent(fromId: string, toId: string) {
   if (!fromId || !toId) return false;
   return isNeighbor(String(fromId), String(toId));
 }
+
 
 useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -424,7 +419,7 @@ useEffect(() => {
   // MOVE: highlight neighbors van fromTileId
   if (mapAction === "MOVE") {
     if (!fromTileId) return [];
-    return neighbors(Number(fromTileId));
+    return neighbors(String(fromTileId));
   }
 
   // TP: highlight neighbors van tpFromTileId (of alles, afhankelijk van jouw teleport rules)
@@ -441,7 +436,7 @@ useEffect(() => {
  
   const toOptions = useMemo(() => {
     if (!fromTileId) return [];
-    return neighbors(Number(fromTileId));
+    return neighbors(String(fromTileId));
   }, [fromTileId]);
 
     
@@ -638,7 +633,7 @@ async function moveTroops() {
     return;
   }
 
-  const allowed = neighbors(Number(fromTileId)).includes(toTileId);
+  const allowed = neighbors(String(fromTileId)).includes(String(toTileId));
   if (!allowed) {
     setStatus("❌ TO moet adjacent zijn aan FROM.");
     return;
