@@ -556,6 +556,12 @@ useEffect(() => {
     if (!pid) return "Unknown";
     return players.find((p) => p.id === pid)?.name ?? pid;
   }
+function labelForPlayer(p: Player) {
+  const a = String(p.avatar ?? "");
+  const emoji = a && !a.startsWith("/") ? a : "";
+  return `${emoji ? emoji + " " : ""}${p.name}`;
+}
+
 
   function Avatar({ value, size = 22 }: { value?: string; size?: number }) {
   const v = String(value ?? "🎲");
@@ -2179,8 +2185,11 @@ return (
 
       <div style={ui.chipRow}>
         <div style={ui.chip}>
-          {(player?.avatar ?? "🎲")} <strong>{player?.name ?? "—"}</strong>
-        </div>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <Avatar value={player?.avatar} size={22} />
+              <strong>{player?.name ?? "—"}</strong>
+            </span>
+          </div>
         <div style={ui.chip}>
           Credits: <strong>{Number(player?.credits ?? 0)}</strong>
         </div>
@@ -2337,10 +2346,14 @@ return (
                       display: "inline-block",
                     }}
                   />
-                  <span style={{ fontSize: 13 }}>
-                    {p.avatar ?? "🎲"} {p.name ?? p.id}
-                    {isMe ? " (you)" : ""}
+                  <span style={{ fontSize: 13, display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <Avatar value={p.avatar} size={18} />
+                    <span>
+                      {p.name ?? p.id}
+                      {isMe ? " (you)" : ""}
+                    </span>
                   </span>
+
                 </div>
               );
             })}
@@ -2745,8 +2758,9 @@ return (
 
           <div style={{ display: "grid", gap: 8 }}>
             <div style={{ fontSize: 18, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span>
-                {(player?.avatar ?? "🎲")} {player?.name ?? "—"}
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+                <Avatar value={player?.avatar} size={24} />
+                <span>{player?.name ?? "—"}</span>
               </span>
 
               {player?.hasDragonglass ? (
