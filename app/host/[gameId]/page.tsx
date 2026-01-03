@@ -711,6 +711,37 @@ async function bamboozleDestroyDragonglass() {
   if (!pid) return "Unknown";
   return players.find((p) => p.id === pid)?.name ?? pid;
 }
+
+function labelForPlayer(p: Player) {
+  const a = String(p.avatar ?? "");
+  const emoji = a && !a.startsWith("/") ? a : "";
+  return `${emoji ? emoji + " " : ""}${p.name}`;
+}
+
+
+function Avatar({ value, size = 22 }: { value?: string; size?: number }) {
+  const v = String(value ?? "🎲");
+
+  if (v.startsWith("/")) {
+    // eslint-disable-next-line @next/next/no-img-element
+    return (
+      <img
+        src={v}
+        alt="avatar"
+        style={{
+          width: size,
+          height: size,
+          borderRadius: Math.max(6, Math.floor(size / 3)),
+          objectFit: "cover",
+          display: "inline-block",
+        }}
+      />
+    );
+  }
+
+  return <span style={{ fontSize: Math.max(16, Math.floor(size * 0.9)) }}>{v}</span>;
+}
+
   // lijst met bezette enemy tiles
     function occupiedEnemyTiles(actorId: string) {
       return tiles
@@ -1846,8 +1877,9 @@ return (
               return (
                 <div key={p.id} style={ui.legendPill}>
                   <span style={{ ...ui.legendSwatch, background: bg }} />
-                  <span style={{ fontSize: 13 }}>
-                    {p.avatar} {p.name}
+                  <span style={{ fontSize: 13, display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <Avatar value={p.avatar} size={18} />
+                    <span>{p.name}</span>
                   </span>
                 </div>
               );
@@ -1866,7 +1898,7 @@ return (
               <option value="">— choose player —</option>
               {players.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.avatar} {p.name}
+                  {labelForPlayer(p)}
                 </option>
               ))}
             </select>
@@ -1956,10 +1988,10 @@ return (
               >
                 <option value="">— choose player —</option>
                 {players.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.avatar} {p.name}
-                  </option>
-                ))}
+                <option key={p.id} value={p.id}>
+                  {labelForPlayer(p)}
+                </option>
+                  ))}
               </select>
             </label>
 
@@ -2020,8 +2052,8 @@ return (
                     const tileId = magesByPlayer[pid]?.tileId;
                     return (
                       <option key={pid} value={pid}>
-                        🧙✅ {p?.avatar ?? ""} {p?.name ?? pid} (tile #{tileId})
-                      </option>
+                     🧙✅ {p ? labelForPlayer(p) : pid} (tile #{tileId})
+                        </option>
                     );
                   })}
                 </select>
@@ -2052,7 +2084,7 @@ return (
                     .filter((p) => !!(p as any).hasDragonglass)
                     .map((p) => (
                       <option key={p.id} value={p.id}>
-                        🔷✅ {p.avatar} {p.name}
+                        🔷✅ {labelForPlayer(p)}
                       </option>
                     ))}
                 </select>
@@ -2231,8 +2263,9 @@ return (
               <tr key={p.id}>
                 <td style={ui.tdLeft}>{idx + 1}</td>
                 <td style={ui.tdLeft}>
-                  <strong>
-                    {p.avatar} {p.name}
+                  <strong style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <Avatar value={p.avatar} size={22} />
+                    <span>{p.name}</span>
                   </strong>
                 </td>
                 <td style={ui.tdRight}>{p.dominance.toFixed(1)}%</td>
@@ -2311,9 +2344,11 @@ return (
             return (
               <div key={p.id} style={ui.playerCard}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                  <strong>
-                    {p.avatar} {p.name}
+                  <strong style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <Avatar value={p.avatar} size={22} />
+                    <span>{p.name}</span>
                   </strong>
+
                   <span style={{ opacity: 0.8, fontSize: 12 }}>Player ID: {p.id}</span>
                 </div>
 

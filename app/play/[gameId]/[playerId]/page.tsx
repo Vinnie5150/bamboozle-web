@@ -557,6 +557,30 @@ useEffect(() => {
     return players.find((p) => p.id === pid)?.name ?? pid;
   }
 
+  function Avatar({ value, size = 22 }: { value?: string; size?: number }) {
+  const v = String(value ?? "🎲");
+
+  if (v.startsWith("/")) {
+    // eslint-disable-next-line @next/next/no-img-element
+    return (
+      <img
+        src={v}
+        alt="avatar"
+        style={{
+          width: size,
+          height: size,
+          borderRadius: Math.max(6, Math.floor(size / 3)),
+          objectFit: "cover",
+          display: "inline-block",
+        }}
+      />
+    );
+  }
+
+  return <span style={{ fontSize: Math.max(16, Math.floor(size * 0.9)) }}>{v}</span>;
+}
+
+
     function playBattleAudio() {
     const a = new Audio("/audio/battle.mp3");
     a.volume = 0.8;

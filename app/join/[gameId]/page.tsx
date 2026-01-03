@@ -2,19 +2,42 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { onAuthStateChanged, signInAnonymously } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+
+type AvatarOption = {
+  id: string;
+  label: string;
+  value: string; // "/avatars/xxx.jpg" or emoji like "🎲"
+};
 
 export default function JoinGamePage() {
   const params = useParams();
   const router = useRouter();
   const gameId = params.gameId as string;
 
+  const AVATARS: AvatarOption[] = useMemo(
+    () => [
+      { id: "anton", label: "Anton", value: "/avatars/Anton.jpg" },
+      { id: "arne", label: "Arne", value: "/avatars/Arne.jpg" },
+      { id: "elizabeth", label: "Elizabeth", value: "/avatars/elizabeth.jpg" },
+      { id: "jochen", label: "Jochen", value: "/avatars/Jochen.jpg" },
+      { id: "stijn", label: "Stijn", value: "/avatars/stijn.jpg" },
+      { id: "tim", label: "Tim", value: "/avatars/Tim.jpg" },
+      { id: "vinnie", label: "Vinnie", value: "/avatars/Vinnie.jpg" },
+      { id: "wannie", label: "Wannie", value: "/avatars/Wannie.jpg" },
+
+      // fallback emoji
+      { id: "dice", label: "🎲", value: "🎲" },
+    ],
+    []
+  );
+
   const [name, setName] = useState("");
-  const [avatar, setAvatar] = useState("🎲");
+  const [avatar, setAvatar] = useState<string>(AVATARS[0]?.value ?? "🎲");
   const [status, setStatus] = useState("");
   const [isJoining, setIsJoining] = useState(false);
 
@@ -41,35 +64,31 @@ export default function JoinGamePage() {
 
     try {
       const ref = await addDoc(collection(db, "games", gameId, "players"), {
-          name: name.trim(),
-          avatar,
+        name: name.trim(),
+        avatar,
 
-          // start phase flags (IMPORTANT)
-          startReady: false,
-          startReadyAt: null,
+        // start phase flags (IMPORTANT)
+        startReady: false,
+        startReadyAt: null,
 
-          // optional but helpful: keep startUnits separate so UI never reads "units"
-          startUnits: { foot: 0, cav: 0, arch: 0 },
+        // keep startUnits separate so UI never reads "units"
+        startUnits: { foot: 0, cav: 0, arch: 0 },
 
-          // game stats
-          credits: 0,
-          dominance: 0,
-          units: { foot: 0, cav: 0, arch: 0 },
+        // game stats
+        credits: 0,
+        dominance: 0,
+        units: { foot: 0, cav: 0, arch: 0 },
 
-          createdAt: serverTimestamp(),
-        });
-
+        createdAt: serverTimestamp(),
+      });
 
       const playerId = ref.id;
 
-      // ✅ optional but strongly recommended: remember this device's playerId for this game
       try {
         localStorage.setItem(`bamboozle:${gameId}:playerId`, playerId);
       } catch {}
 
       setStatus("✅ Joined! Redirecting to start setup...");
-
-      // ✅ automatic redirect to start page
       router.push(`/start/${gameId}/${playerId}`);
     } catch (err: any) {
       console.error(err);
@@ -78,6 +97,8 @@ export default function JoinGamePage() {
     }
   }
 
+  const isImageAvatar = typeof avatar === "string" && avatar.startsWith("/");
+
   return (
     <main style={{ padding: 24 }}>
       <h1>Join Game</h1>
@@ -85,25 +106,77 @@ export default function JoinGamePage() {
 
       <div style={{ marginTop: 16 }}>
         <label>
-          Name<br />
+          Name
+          <br />
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            style={{ padding: 8, width: 200 }}
+            style={{ padding: 8, width: 240 }}
+            placeholder="Your name"
           />
         </label>
       </div>
 
+      {/* Avatar picker */}
       <div style={{ marginTop: 16 }}>
-        <label>
-          Avatar<br />
-          <input
-            value={avatar}
-            onChange={(e) => setAvatar(e.target.value)}
-            style={{ padding: 8, width: 200 }}
-          />
-        </label>
-        <p style={{ fontSize: 24 }}>{avatar}</p>
+        <div style={{ marginBottom: 6 }}>Avatar</div>
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {AVATARS.map((a) => {
+            const selected = avatar === a.value;
+            const isImg = a.value.startsWith("/");
+
+            return (
+              <button
+                key={a.id}
+                type="button"
+                onClick={() => setAvatar(a.value)}
+                style={{
+                  border: selected ? "2px solid black" : "1px solid #ccc",
+                  borderRadius: 10,
+                  padding: 6,
+                  width: 68,
+                  height: 68,
+                  cursor: "pointer",
+                  background: selected ? "rgba(0,0,0,0.08)" : "white",
+                  display: "grid",
+                  placeItems: "center",
+                }}
+                title={a.label}
+              >
+                {isImg ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={a.value}
+                    alt={a.label}
+                    style={{
+                      width: 52,
+                      height: 52,
+                      objectFit: "cover",
+                      borderRadius: 9,
+                    }}
+                  />
+                ) : (
+                  <span style={{ fontSize: 28 }}>{a.value}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, opacity: 0.9 }}>
+          <span style={{ fontSize: 12 }}>Selected:</span>
+          {isImageAvatar ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={avatar}
+              alt="selected avatar"
+              style={{ width: 28, height: 28, objectFit: "cover", borderRadius: 6 }}
+            />
+          ) : (
+            <span style={{ fontSize: 22 }}>{avatar}</span>
+          )}
+        </div>
       </div>
 
       <button
