@@ -35,12 +35,12 @@ type Player = {
     foot: number;
     cav: number;
     arch: number;
+    };
   exp?: {
     foot: number;
     cav: number;
     arch: number;
     };
-  };
 };
 
 type Tile = {
