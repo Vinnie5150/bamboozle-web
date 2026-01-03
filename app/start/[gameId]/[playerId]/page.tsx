@@ -105,23 +105,13 @@ export default function StartPositionPage() {
 
       setStartEndsAtMs(endsAt ? endsAt.getTime() : null);
 
-      // ✅ If host ended start phase, redirect (unless already on play page)
-      if (!active) {
-        router.replace(`/play/${gameId}/${playerId}`);
-      }
+     
     });
 
     return () => unsub();
   }, [authReady, gameId, playerId, router]);
 
-  // ✅ also redirect if timer elapsed (covers case where startActive still true but time passed)
-  useEffect(() => {
-    if (!authReady) return;
-    if (startLockedByTime) {
-      router.replace(`/play/${gameId}/${playerId}`);
-    }
-  }, [authReady, startLockedByTime, gameId, playerId, router]);
-
+  
   // -----------------------------
   // Listen: tiles
   // -----------------------------
@@ -524,19 +514,20 @@ export default function StartPositionPage() {
       )}
 
       <button
-        onClick={markReady}
-        disabled={!authReady || isLocked}
-        style={{
-          marginTop: 16,
-          padding: "10px 16px",
-          border: "1px solid black",
-          borderRadius: 8,
-          cursor: !authReady || isLocked ? "not-allowed" : "pointer",
-          opacity: !authReady || isLocked ? 0.5 : 1,
-        }}
-      >
-        I’m ready (lock in)
-      </button>
+          onClick={markReady}
+          disabled={!authReady || startReady}
+          style={{
+            marginTop: 16,
+            padding: "10px 16px",
+            border: "1px solid black",
+            borderRadius: 8,
+            cursor: !authReady || startReady ? "not-allowed" : "pointer",
+            opacity: !authReady || startReady ? 0.5 : 1,
+          }}
+        >
+          I’m ready (lock in)
+        </button>
+
 
       <p style={{ marginTop: 16 }}>{status}</p>
     </main>
