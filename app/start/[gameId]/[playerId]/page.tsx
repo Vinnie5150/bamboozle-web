@@ -42,10 +42,13 @@ export default function StartPositionPage() {
     Record<string, { foot: number; cav: number; arch: number }>
   >({});
 
-  // Start phase timer state (UI/locking only)
+  // Start phase timer state
   const [startEndsAtMs, setStartEndsAtMs] = useState<number | null>(null);
   const [startActive, setStartActive] = useState(false);
   const [nowMs, setNowMs] = useState<number>(Date.now());
+
+  // Optional host-finalize flag (keep if you want)
+  const [startFinalized, setStartFinalized] = useState(false);
 
   const [status, setStatus] = useState("");
 
@@ -69,25 +72,14 @@ export default function StartPositionPage() {
     return () => unsub();
   }, []);
 
-  // Local ticking clock for countdown display
+  // Local ticking clock for countdown display + timer checks
   useEffect(() => {
     const t = setInterval(() => setNowMs(Date.now()), 250);
     return () => clearInterval(t);
   }, []);
 
-  const timeLeftSec =
-    startEndsAtMs !== null ? Math.max(0, Math.ceil((startEndsAtMs - nowMs) / 1000)) : null;
-
-  // lock claim/deploy when:
-  // - player already startReady
-  // - start phase not active
-  // - timer elapsed
-  const startLockedByTime = startEndsAtMs !== null && nowMs >= startEndsAtMs;
-  const isLocked = startReady || !startActive || startLockedByTime;
-
   // -----------------------------
-  // Listen: game doc (startClaim)
-  // NOTE: NO redirects from here.
+  // Game doc listener
   // -----------------------------
   useEffect(() => {
     if (!authReady) return;
@@ -103,13 +95,40 @@ export default function StartPositionPage() {
 
       const endsAt = startClaim?.endsAt?.toDate?.() ? startClaim.endsAt.toDate() : null;
       setStartEndsAtMs(endsAt ? endsAt.getTime() : null);
+
+      // optional flag
+      setStartFinalized(!!data?.startFinalized);
     });
 
     return () => unsub();
   }, [authReady, gameId]);
 
+  // ✅ REDIRECT RULES (single place)
+  // go to play ONLY if:
+  // - host finalized, OR
+  // - timer has ended (active phase has an endsAt and now >= endsAt)
+  useEffect(() => {
+    if (!authReady) return;
+
+    const timerEnded = startEndsAtMs !== null && nowMs >= startEndsAtMs;
+
+    if (startFinalized || timerEnded) {
+      router.replace(`/play/${gameId}/${playerId}`);
+    }
+  }, [authReady, startFinalized, startEndsAtMs, nowMs, router, gameId, playerId]);
+
+  const timeLeftSec =
+    startEndsAtMs !== null ? Math.max(0, Math.ceil((startEndsAtMs - nowMs) / 1000)) : null;
+
+  // ✅ Lock claim/deploy when:
+  // - player already startReady
+  // - start phase not active (LOBBY)
+  // - timer elapsed
+  const startLockedByTime = startEndsAtMs !== null && nowMs >= startEndsAtMs;
+  const isLocked = startReady || !startActive || startLockedByTime;
+
   // -----------------------------
-  // Listen: tiles
+  // Tiles listener
   // -----------------------------
   useEffect(() => {
     if (!authReady) return;
@@ -126,8 +145,7 @@ export default function StartPositionPage() {
   }, [authReady, gameId, playerId]);
 
   // -----------------------------
-  // Listen: player doc (startReady + startUnits)
-  // NOTE: NO redirects from here.
+  // Player doc listener
   // -----------------------------
   useEffect(() => {
     if (!authReady) return;
@@ -137,8 +155,7 @@ export default function StartPositionPage() {
     const unsub = onSnapshot(playerRef, (snap) => {
       const data = (snap.data() as any) ?? {};
 
-      const ready = !!data?.startReady;
-      setStartReady(ready);
+      setStartReady(!!data?.startReady);
 
       const su = data?.startUnits ?? data?.units ?? null;
       if (su) {
@@ -156,7 +173,7 @@ export default function StartPositionPage() {
   }, [authReady, gameId, playerId]);
 
   // -----------------------------
-  // Listen: deployments
+  // Deployments listener
   // -----------------------------
   useEffect(() => {
     if (!authReady) return;
@@ -190,7 +207,7 @@ export default function StartPositionPage() {
     if (!basecamp) return;
 
     if (isLocked) {
-      setStatus("⏱️ Start phase is locked. You can’t claim more tiles.");
+      setStatus(!startActive ? "⏳ Waiting for host to start the 2-minute timer..." : "⏱️ Locked.");
       return;
     }
 
@@ -224,21 +241,16 @@ export default function StartPositionPage() {
           throw new Error("You cannot claim an enemy basecamp");
         }
 
-        // Own basecamp: just mark as start tile
         if (isOwnBasecamp) {
           tx.update(tileRef, { isStartTile: true });
           return;
         }
 
-        // Adjacent tile: must be free or already yours
         if (owner && owner !== playerId) {
           throw new Error("Tile already taken");
         }
 
-        tx.update(tileRef, {
-          ownerPlayerId: playerId,
-          isStartTile: true,
-        });
+        tx.update(tileRef, { ownerPlayerId: playerId, isStartTile: true });
       });
 
       setStatus(`✅ Claimed tile #${tileId}`);
@@ -254,6 +266,11 @@ export default function StartPositionPage() {
   ) {
     if (!authReady) {
       setStatus("⏳ Waiting for login...");
+      return;
+    }
+
+    if (isLocked) {
+      setStatus(!startActive ? "⏳ Waiting for host to start the 2-minute timer..." : "⏱️ Locked.");
       return;
     }
 
@@ -300,16 +317,7 @@ export default function StartPositionPage() {
 
     const ref = doc(db, "games", gameId, "deployments", playerId, "tiles", tileId);
 
-    await setDoc(
-      ref,
-      {
-        foot: nextForTile.foot,
-        cav: nextForTile.cav,
-        arch: nextForTile.arch,
-      },
-      { merge: true }
-    );
-
+    await setDoc(ref, nextForTile, { merge: true });
     setStatus("");
   }
 
@@ -332,7 +340,7 @@ export default function StartPositionPage() {
       { merge: true }
     );
 
-    // ✅ ONLY redirect that exists in this page:
+    // ✅ player can always go to play when they decide
     router.replace(`/play/${gameId}/${playerId}`);
   }
 
@@ -378,11 +386,17 @@ export default function StartPositionPage() {
 
       <div style={{ marginTop: 12 }}>
         <div>
-          Start phase: <strong>{startActive ? "ACTIVE" : "INACTIVE"}</strong>
+          Start phase: <strong>{startActive ? "ACTIVE" : "WAITING (lobby)"}</strong>
         </div>
         <div>
           Time left: <strong>{timeLeftSec === null ? "-" : `${timeLeftSec}s`}</strong>
         </div>
+
+        {!startActive && (
+          <div style={{ marginTop: 10, padding: 10, border: "1px solid #ccc", borderRadius: 10 }}>
+            ⏳ Waiting for the host to start the 2-minute timer. You’ll stay on this page.
+          </div>
+        )}
 
         <div style={{ marginTop: 8 }}>
           <strong>Start units:</strong>{" "}
@@ -402,7 +416,7 @@ export default function StartPositionPage() {
         </div>
 
         {!authReady && <div style={{ marginTop: 8 }}>🔐 Logging in...</div>}
-        {isLocked && <div style={{ marginTop: 8 }}>⏱️ Locked (claim/deploy disabled).</div>}
+        {isLocked && startActive && <div style={{ marginTop: 8 }}>⏱️ Locked.</div>}
       </div>
 
       {!basecamp && <p style={{ marginTop: 12 }}>Waiting for basecamp assignment...</p>}
@@ -420,7 +434,7 @@ export default function StartPositionPage() {
               const isOwn = t?.ownerPlayerId === playerId;
               const isTakenByOther = !!t?.ownerPlayerId && t?.ownerPlayerId !== playerId;
 
-              const label = id === basecamp?.id ? `🏠 Basecamp (#${id})` : `Tile #${id}`;
+              const label = id === basecamp.id ? `🏠 Basecamp (#${id})` : `Tile #${id}`;
 
               return (
                 <div
@@ -485,12 +499,6 @@ export default function StartPositionPage() {
                       />
                     </label>
                   </div>
-
-                  {!isOwn && (
-                    <div style={{ marginTop: 6, fontSize: 12, color: "#666" }}>
-                      Claim this tile first to deploy troops.
-                    </div>
-                  )}
                 </div>
               );
             })}
