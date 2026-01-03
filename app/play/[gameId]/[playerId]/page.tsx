@@ -2145,549 +2145,1042 @@ const ui = {
   } as const,
 };
 
-"use client";
-
-import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { onAuthStateChanged, signInAnonymously } from "firebase/auth";
-import { auth, db } from "@/lib/firebase";
-import { isNeighbor, HEX_TILES_60 } from "@/app/_components/tileLayout";
-import {
-  collection,
-  doc,
-  onSnapshot,
-  runTransaction,
-  setDoc,
-  serverTimestamp,
-} from "firebase/firestore";
-
-type Tile = {
-  id: string;
-  ownerPlayerId: string | null;
-  isBasecamp: boolean;
-  basecampOwnerPlayerId?: string | null;
-  isStartTile?: boolean;
-};
-
-export default function StartPositionPage() {
-  const params = useParams();
-  const router = useRouter();
-  const gameId = params.gameId as string;
-  const playerId = params.playerId as string;
-
-  const [authReady, setAuthReady] = useState(false);
-
-  const [tiles, setTiles] = useState<Tile[]>([]);
-  const [basecamp, setBasecamp] = useState<Tile | null>(null);
-
-  const [startUnits, setStartUnits] = useState<{ foot: number; cav: number; arch: number } | null>(null);
-  const [startReady, setStartReady] = useState(false);
-
-  const [deployments, setDeployments] = useState<Record<string, { foot: number; cav: number; arch: number }>>({});
-
-  // Start phase timer state
-  const [startEndsAtMs, setStartEndsAtMs] = useState<number | null>(null);
-  const [startActive, setStartActive] = useState(false);
-  const [nowMs, setNowMs] = useState<number>(Date.now());
-
-  const [status, setStatus] = useState("");
-
-  // -----------------------------
-  // Auth
-  // -----------------------------
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (user) => {
-      if (!user) {
-        try {
-          await signInAnonymously(auth);
-        } catch (err) {
-          console.error("Anonymous sign-in failed:", err);
-          alert("Anonymous login failed. Check console.");
-          return;
-        }
-      }
-      setAuthReady(true);
-    });
-
-    return () => unsub();
-  }, []);
-
-  // Local ticking clock for countdown
-  useEffect(() => {
-    const t = setInterval(() => setNowMs(Date.now()), 250);
-    return () => clearInterval(t);
-  }, []);
-
-  const timeLeftSec =
-    startEndsAtMs !== null
-      ? Math.max(0, Math.ceil((startEndsAtMs - nowMs) / 1000))
-      : null;
-
-  // start is locked if:
-  // - player already startReady
-  // - host locked startActive false
-  // - timer elapsed
-  const startLockedByTime = startEndsAtMs !== null && nowMs >= startEndsAtMs;
-  const isLocked = startReady || !startActive || startLockedByTime;
-
-  // -----------------------------
-  // Listen: game doc (startClaim)
-  // + auto redirect when start becomes inactive / time elapsed
-  // -----------------------------
-  useEffect(() => {
-    if (!authReady) return;
-
-    const gameRef = doc(db, "games", gameId);
-
-    const unsub = onSnapshot(gameRef, (snap) => {
-      const data = snap.data() as any;
-      const startClaim = data?.startClaim ?? null;
-
-      const active = !!startClaim?.active;
-      setStartActive(active);
-
-      const endsAt = startClaim?.endsAt?.toDate?.()
-        ? startClaim.endsAt.toDate()
-        : null;
-
-      setStartEndsAtMs(endsAt ? endsAt.getTime() : null);
-
-      // ✅ If host ended start phase, redirect (unless already on play page)
-      if (!active) {
-        router.replace(`/play/${gameId}/${playerId}`);
-      }
-    });
-
-    return () => unsub();
-  }, [authReady, gameId, playerId, router]);
-
-  // ✅ also redirect if timer elapsed (covers case where startActive still true but time passed)
-  useEffect(() => {
-    if (!authReady) return;
-    if (startLockedByTime) {
-      router.replace(`/play/${gameId}/${playerId}`);
-    }
-  }, [authReady, startLockedByTime, gameId, playerId, router]);
-
-  // -----------------------------
-  // Listen: tiles
-  // -----------------------------
-  useEffect(() => {
-    if (!authReady) return;
-
-    const unsub = onSnapshot(collection(db, "games", gameId, "tiles"), (snap) => {
-      const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }) as Tile);
-      setTiles(list);
-
-      const bc =
-        list.find((t) => t.isBasecamp && t.basecampOwnerPlayerId === playerId) ?? null;
-
-      setBasecamp(bc);
-    });
-
-    return () => unsub();
-  }, [authReady, gameId, playerId]);
-
-  // -----------------------------
-  // Listen: player doc (startReady + startUnits)
-  // + auto redirect when host sets startReady true (Finalize & fill remainder)
-  // -----------------------------
-  useEffect(() => {
-    if (!authReady) return;
-
-    const playerRef = doc(db, "games", gameId, "players", playerId);
-
-    const unsub = onSnapshot(playerRef, (snap) => {
-      const data = snap.data() as any;
-
-      const ready = !!data?.startReady;
-      setStartReady(ready);
-
-      // ✅ Host “Finalize start + fill remainder” will set startReady true -> redirect automatically
-      if (ready) {
-        router.replace(`/play/${gameId}/${playerId}`);
-        return;
-      }
-
-      const su = data?.startUnits ?? data?.units ?? null;
-      if (su) {
-        setStartUnits({
-          foot: Number(su.foot ?? 0),
-          cav: Number(su.cav ?? 0),
-          arch: Number(su.arch ?? 0),
-        });
-      } else {
-        setStartUnits(null);
-      }
-    });
-
-    return () => unsub();
-  }, [authReady, gameId, playerId, router]);
-
-  // -----------------------------
-  // Listen: deployments
-  // -----------------------------
-  useEffect(() => {
-    if (!authReady) return;
-
-    const depCol = collection(db, "games", gameId, "deployments", playerId, "tiles");
-
-    const unsub = onSnapshot(depCol, (snap) => {
-      const next: Record<string, { foot: number; cav: number; arch: number }> = {};
-      snap.docs.forEach((d) => {
-        const data = d.data() as any;
-        next[d.id] = {
-          foot: Number(data.foot ?? 0),
-          cav: Number(data.cav ?? 0),
-          arch: Number(data.arch ?? 0),
-        };
-      });
-      setDeployments(next);
-    });
-
-    return () => unsub();
-  }, [authReady, gameId, playerId]);
-
-  // -----------------------------
-  // Actions
-  // -----------------------------
-  async function claimStartTile(tileId: string) {
-    if (!authReady) {
-      setStatus("⏳ Waiting for login...");
-      return;
-    }
-    if (!basecamp) return;
-
-    if (isLocked) {
-      setStatus("⏱️ Start phase is locked. You can’t claim more tiles.");
-      return;
-    }
-
-    setStatus("Claiming...");
-
-    const basecampId = basecamp.id;
-    const isAdjacent = isNeighbor(String(basecampId), String(tileId));
-    const isBasecampTile = tileId === basecampId;
-
-    if (!isBasecampTile && !isAdjacent) {
-      setStatus("❌ Only basecamp or adjacent tiles are allowed");
-      return;
-    }
-
-    const tileRef = doc(db, "games", gameId, "tiles", tileId);
-
-    try {
-      await runTransaction(db, async (tx) => {
-        const snap = await tx.get(tileRef);
-        if (!snap.exists()) throw new Error("Tile not found");
-
-        const t = snap.data() as any;
-
-        const tileIsBasecamp = !!t.isBasecamp;
-        const basecampOwner = t.basecampOwnerPlayerId ?? null;
-        const owner = t.ownerPlayerId ?? null;
-
-        const isOwnBasecamp = tileIsBasecamp && basecampOwner === playerId;
-
-        if (tileIsBasecamp && !isOwnBasecamp) {
-          throw new Error("You cannot claim an enemy basecamp");
-        }
-
-        // Own basecamp: just mark as start tile
-        if (isOwnBasecamp) {
-          tx.update(tileRef, { isStartTile: true });
-          return;
-        }
-
-        // Adjacent tile: must be free or already yours
-        if (owner && owner !== playerId) {
-          throw new Error("Tile already taken");
-        }
-
-        tx.update(tileRef, {
-          ownerPlayerId: playerId,
-          isStartTile: true,
-        });
-      });
-
-      setStatus(`✅ Claimed tile #${tileId}`);
-    } catch (err: any) {
-      console.error(err);
-      setStatus(`❌ ${err?.message ?? String(err)}`);
-    }
-  }
-
-  async function setDeployment(
-    tileId: string,
-    patch: Partial<{ foot: number; cav: number; arch: number }>
-  ) {
-    if (!authReady) {
-      setStatus("⏳ Waiting for login...");
-      return;
-    }
-
-    if (!startUnits) {
-      setStatus("❌ Start units not set yet (host must save pregame setup).");
-      return;
-    }
-
-    const current = deployments[tileId] ?? { foot: 0, cav: 0, arch: 0 };
-
-    const nextForTile = {
-      foot: patch.foot ?? current.foot,
-      cav: patch.cav ?? current.cav,
-      arch: patch.arch ?? current.arch,
-    };
-
-    // totals excluding this tile
-    const othersTotals = Object.entries(deployments).reduce(
-      (acc, [id, d]) => {
-        if (id === tileId) return acc;
-        return {
-          foot: acc.foot + (d.foot ?? 0),
-          cav: acc.cav + (d.cav ?? 0),
-          arch: acc.arch + (d.arch ?? 0),
-        };
-      },
-      { foot: 0, cav: 0, arch: 0 }
-    );
-
-    const wouldTotal = {
-      foot: othersTotals.foot + nextForTile.foot,
-      cav: othersTotals.cav + nextForTile.cav,
-      arch: othersTotals.arch + nextForTile.arch,
-    };
-
-    if (
-      wouldTotal.foot > startUnits.foot ||
-      wouldTotal.cav > startUnits.cav ||
-      wouldTotal.arch > startUnits.arch
-    ) {
-      setStatus("❌ You can't deploy more troops than your start units.");
-      return;
-    }
-
-    const ref = doc(db, "games", gameId, "deployments", playerId, "tiles", tileId);
-
-    await setDoc(
-      ref,
-      {
-        foot: nextForTile.foot,
-        cav: nextForTile.cav,
-        arch: nextForTile.arch,
-      },
-      { merge: true }
-    );
-
-    setStatus("");
-  }
-
-  async function markReady() {
-    if (!authReady) {
-      setStatus("⏳ Waiting for login...");
-      return;
-    }
-
-    setStatus("Locking in...");
-
-    const ref = doc(db, "games", gameId, "players", playerId);
-
-    await setDoc(
-      ref,
-      {
-        startReady: true,
-        startReadyAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
-
-    // ✅ immediate redirect; also covered by snapshot listener
-    router.replace(`/play/${gameId}/${playerId}`);
-  }
-
-  // -----------------------------
-  // Derived UI values
-  // -----------------------------
-  const deployedTotals = useMemo(() => {
-    return Object.values(deployments).reduce(
-      (acc, d) => ({
-        foot: acc.foot + (d.foot ?? 0),
-        cav: acc.cav + (d.cav ?? 0),
-        arch: acc.arch + (d.arch ?? 0),
-      }),
-      { foot: 0, cav: 0, arch: 0 }
-    );
-  }, [deployments]);
-
-  const remaining = useMemo(() => {
-    if (!startUnits) return null;
-    return {
-      foot: Math.max(0, startUnits.foot - deployedTotals.foot),
-      cav: Math.max(0, startUnits.cav - deployedTotals.cav),
-      arch: Math.max(0, startUnits.arch - deployedTotals.arch),
-    };
-  }, [startUnits, deployedTotals]);
-
-  const claimableTileIds = useMemo(() => {
-    if (!basecamp) return [];
-    const base = HEX_TILES_60.find((t) => t.id === String(basecamp.id));
-    if (!base) return [];
-    return [base.id, ...base.neighbors];
-  }, [basecamp]);
-
-  // -----------------------------
-  // UI
-  // -----------------------------
-  return (
-    <main style={{ padding: 24 }}>
-      <h1>Choose your start position</h1>
-      <p>
-        Game: <strong>{gameId}</strong> — Player: <strong>{playerId}</strong>
-      </p>
-
-      <div style={{ marginTop: 12 }}>
-        <div>
-          Start phase: <strong>{startActive ? "ACTIVE" : "INACTIVE"}</strong>
+// UI block
+return (
+  <main style={ui.page}>
+    {/* Header */}
+    <div style={ui.header}>
+      <div>
+        <h1 style={ui.title}>HORGOTH — Player</h1>
+        <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>
+          Game: {gameId} · Player: {playerId}
         </div>
-        <div>
-          Time left:{" "}
-          <strong>{timeLeftSec === null ? "-" : `${timeLeftSec}s`}</strong>
-        </div>
-
-        <div style={{ marginTop: 8 }}>
-          <strong>Start units:</strong>{" "}
-          {startUnits
-            ? `Foot ${startUnits.foot}, Cav ${startUnits.cav}, Arch ${startUnits.arch}`
-            : "—"}
-        </div>
-
-        <div>
-          <strong>Deployed:</strong> Foot {deployedTotals.foot}, Cav{" "}
-          {deployedTotals.cav}, Arch {deployedTotals.arch}
-        </div>
-
-        <div>
-          <strong>Remaining:</strong>{" "}
-          {remaining
-            ? `Foot ${remaining.foot}, Cav ${remaining.cav}, Arch ${remaining.arch}`
-            : "—"}
-        </div>
-
-        {!authReady && <div style={{ marginTop: 8 }}>🔐 Logging in...</div>}
-        {isLocked && <div style={{ marginTop: 8 }}>⏱️ Locked.</div>}
       </div>
 
-      {!basecamp && <p style={{ marginTop: 12 }}>Waiting for basecamp assignment...</p>}
+      <div style={ui.chipRow}>
+        <div style={ui.chip}>
+          {(player?.avatar ?? "🎲")} <strong>{player?.name ?? "—"}</strong>
+        </div>
+        <div style={ui.chip}>
+          Credits: <strong>{Number(player?.credits ?? 0)}</strong>
+        </div>
+        <div style={ui.chip}>
+          Basecamp: <strong>{basecamp ? `#${basecamp.id}` : "—"}</strong>
+        </div>
+      </div>
+    </div>
 
-      {basecamp && (
-        <>
-          <p style={{ marginTop: 12 }}>
-            Your basecamp is tile <strong>#{basecamp.id}</strong>
-          </p>
-          <p>Claim start tiles (basecamp + adjacent) and deploy your start troops.</p>
+    <div style={ui.grid}>
+      {/* LEFT: MAP + legend + notifications + BUY ACTIONS */}
+      <section style={ui.card}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <h2 style={ui.cardTitle}>World Map</h2>
+          <div style={{ fontSize: 12, opacity: 0.75 }}>
+            🗺️ Klik tiles om FROM/TO (Move) of TP_FROM/TP_TO (Teleport) te kiezen
+          </div>
+        </div>
 
-          <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
-            {claimableTileIds.map((id) => {
-              const t = tiles.find((x) => x.id === id);
-              const isOwn = t?.ownerPlayerId === playerId;
-              const isTakenByOther = !!t?.ownerPlayerId && t?.ownerPlayerId !== playerId;
+        <div style={{ textAlign: "center", marginBottom: 8, fontSize: 12, opacity: 0.9 }}>
+          🗺️ Klik op de map: <b>{mapPickMode === "FROM" ? "kies FROM" : "kies TO"}</b>
+        </div>
 
-              const label = id === basecamp.id ? `🏠 Basecamp (#${id})` : `Tile #${id}`;
+        <MapSvg
+          tiles={tiles as any}
+          tileTroops={tileTroopsAll as any}
+          colorForPlayer={colorForPlayer}
+          mageByTile={mageByTile as any}
+          selectedTileId={selectedTileId}
+          highlightTileIds={highlightTileIds}
+          onSelectTile={(id) => {
+            setSelectedTileId(id);
+
+            // ====== MOVE flow ======
+            if (mapAction === "MOVE") {
+              if (mapPickMode === "FROM") {
+                if (!isMine(id)) {
+                  setStatus("❌ FROM moet een tile zijn die jij controleert.");
+                  return;
+                }
+                setFromTileId(id);
+                setStatus(`✅ FROM gekozen: tile #${id}. Kies nu je TO.`);
+                setMapPickMode("TO");
+                return;
+              }
+
+              if (mapPickMode === "TO") {
+                if (!fromTileId) {
+                  setStatus("❌ Kies eerst een FROM tile.");
+                  setMapPickMode("FROM");
+                  return;
+                }
+                if (id === fromTileId) {
+                  setToTileId("");
+                  setStatus("↩️ TO gereset. Kies opnieuw je bestemming.");
+                  return;
+                }
+                if (!isAdjacent(fromTileId, id)) {
+                  setStatus(`❌ Tile #${id} is niet adjacent aan FROM #${fromTileId}.`);
+                  return;
+                }
+                setToTileId(id);
+                setStatus(`✅ TO gekozen: tile #${id}. Klaar om te bewegen.`);
+                return;
+              }
+            }
+
+            // ====== TELEPORT flow ======
+            if (mapAction === "TP") {
+              if (tpPickMode === "TP_FROM") {
+                if (!isMine(id)) {
+                  setStatus("❌ TP FROM moet een tile zijn die jij controleert.");
+                  return;
+                }
+                setTpFromTileId(id);
+                setStatus(`✅ TP FROM gekozen: tile #${id}. Kies nu TP TO.`);
+                setTpPickMode("TP_TO");
+                return;
+              }
+
+              if (tpPickMode === "TP_TO") {
+                if (!tpFromTileId) {
+                  setStatus("❌ Kies eerst een TP FROM tile.");
+                  setTpPickMode("TP_FROM");
+                  return;
+                }
+
+                if (id === tpFromTileId) {
+                  setTpToTileId("");
+                  setStatus("↩️ TP TO gereset. Kies opnieuw je bestemming.");
+                  return;
+                }
+
+                setTpToTileId(id);
+                setStatus(`✅ TP TO gekozen: tile #${id}. Klaar om te teleporteren.`);
+                return;
+              }
+            }
+          }}
+        />
+
+        {status ? <div style={{ marginTop: 10, ...ui.chip, borderRadius: 12 }}>{status}</div> : null}
+
+        {/* Legend */}
+        <div style={{ marginTop: 14 }}>
+          <h3 style={ui.cardTitle}>Legend</h3>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {players.map((p) => {
+              const bg = colorForPlayer(p.id);
+              const isMe = p.id === playerId;
 
               return (
                 <div
-                  key={id}
+                  key={p.id}
                   style={{
-                    border: "1px solid #ccc",
-                    borderRadius: 10,
-                    padding: 10,
-                    minWidth: 230,
-                    opacity: isTakenByOther ? 0.4 : 1,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "6px 10px",
+                    borderRadius: 999,
+                    border: "1px solid rgba(243,231,207,0.18)",
+                    background: isMe ? "rgba(243,231,207,0.10)" : "rgba(243,231,207,0.04)",
                   }}
                 >
-                  <button
-                    disabled={!authReady || isLocked || isTakenByOther}
-                    onClick={() => claimStartTile(id)}
+                  <span
                     style={{
-                      padding: "8px 12px",
-                      border: "1px solid black",
-                      borderRadius: 8,
-                      cursor: !authReady || isLocked || isTakenByOther ? "not-allowed" : "pointer",
-                      width: "100%",
-                      textAlign: "left",
+                      width: 14,
+                      height: 14,
+                      borderRadius: 4,
+                      background: bg,
+                      border: "1px solid rgba(0,0,0,0.55)",
+                      display: "inline-block",
                     }}
-                  >
-                    {label} {isOwn ? "✅" : ""}
-                  </button>
-
-                  <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <label style={{ fontSize: 12 }}>
-                      Foot{" "}
-                      <input
-                        type="number"
-                        value={deployments[id]?.foot ?? 0}
-                        disabled={!authReady || isLocked || !isOwn}
-                        onChange={(e) => setDeployment(id, { foot: Number(e.target.value) })}
-                        style={{ width: 62 }}
-                        min={0}
-                      />
-                    </label>
-
-                    <label style={{ fontSize: 12 }}>
-                      Cav{" "}
-                      <input
-                        type="number"
-                        value={deployments[id]?.cav ?? 0}
-                        disabled={!authReady || isLocked || !isOwn}
-                        onChange={(e) => setDeployment(id, { cav: Number(e.target.value) })}
-                        style={{ width: 62 }}
-                        min={0}
-                      />
-                    </label>
-
-                    <label style={{ fontSize: 12 }}>
-                      Arch{" "}
-                      <input
-                        type="number"
-                        value={deployments[id]?.arch ?? 0}
-                        disabled={!authReady || isLocked || !isOwn}
-                        onChange={(e) => setDeployment(id, { arch: Number(e.target.value) })}
-                        style={{ width: 62 }}
-                        min={0}
-                      />
-                    </label>
-                  </div>
-
-                  {!isOwn && (
-                    <div style={{ marginTop: 6, fontSize: 12, color: "#666" }}>
-                      Claim this tile first to deploy troops.
-                    </div>
-                  )}
+                  />
+                  <span style={{ fontSize: 13 }}>
+                    {p.avatar ?? "🎲"} {p.name ?? p.id}
+                    {isMe ? " (you)" : ""}
+                  </span>
                 </div>
               );
             })}
           </div>
-        </>
-      )}
+        </div>
 
-      <button
-        onClick={markReady}
-        disabled={!authReady || isLocked}
-        style={{
-          marginTop: 16,
-          padding: "10px 16px",
-          border: "1px solid black",
-          borderRadius: 8,
-          cursor: !authReady || isLocked ? "not-allowed" : "pointer",
-          opacity: !authReady || isLocked ? 0.5 : 1,
-        }}
-      >
-        I’m ready (lock in)
-      </button>
+        {/* Notifications */}
+        <div style={{ marginTop: 14 }}>
+          <h3 style={ui.cardTitle}>Notifications</h3>
+          <div style={{ maxHeight: 220, overflow: "auto", paddingRight: 6 }}>
+            {battleLogMine.length === 0 ? (
+              <div style={{ opacity: 0.75, fontSize: 13 }}>No notifications yet.</div>
+            ) : (
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {battleLogMine.map((e) => {
+                  let text = "";
 
-      <p style={{ marginTop: 16 }}>{status}</p>
-    </main>
-  );
-}
+                  if (e.type === "CONQUER") {
+                    text = `You conquered tile #${e.tileId}.`;
+                  } else if (e.type === "RELEASE") {
+                    text = `You left tile #${e.tileId} empty (it became neutral).`;
+                  } else if (e.type === "ATTACKER_WIN") {
+                    const defender = nameFor((e as any).defenderId);
+                    text =
+                      (e as any).attackerId === playerId
+                        ? `You attacked tile #${e.tileId} from ${defender} and WON.`
+                        : `You were attacked on tile #${e.tileId} by ${nameFor((e as any).attackerId)} and LOST.`;
+                  } else if (e.type === "DEFENDER_HOLD") {
+                    const defender = nameFor((e as any).defenderId);
+                    text =
+                      (e as any).attackerId === playerId
+                        ? `You attacked tile #${e.tileId} from ${defender} but LOST.`
+                        : `You were attacked on tile #${e.tileId} by ${nameFor((e as any).attackerId)} and WON (held the tile).`;
+                  } else if (e.type === "DRAW") {
+                    const attacker = nameFor((e as any).attackerId);
+                    const defender = nameFor((e as any).defenderId);
+                    text =
+                      (e as any).attackerId === playerId
+                        ? `You attacked tile #${e.tileId} from ${defender} — DRAW. Both armies destroyed.`
+                        : `You were attacked on tile #${e.tileId} by ${attacker} — DRAW. Both armies destroyed.`;
+                  } else {
+                    text = `Event on tile #${(e as any).tileId}`;
+                  }
+
+                  return (
+                    <li key={(e as any).id} style={{ marginBottom: 6, fontSize: 13, opacity: 0.95 }}>
+                      {text}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        {/* ===== BUY ACTIONS (moved under Notifications) ===== */}
+
+        {/* Experience */}
+        <section style={{ ...ui.card, marginTop: 14 }}>
+          <h2 style={ui.cardTitle}>Experience</h2>
+
+          <div style={{ marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
+            {(() => {
+              const exp = getMyExpSafe();
+
+              const itemStyle: React.CSSProperties = {
+                border: "1px solid rgba(243,231,207,0.16)",
+                borderRadius: 12,
+                padding: "8px 10px",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                background: "rgba(0,0,0,0.10)",
+              };
+
+              const btnStyle: React.CSSProperties = { ...ui.button, padding: "6px 10px", borderRadius: 10 };
+
+              return (
+                <>
+                  <div style={itemStyle}>
+                    <span>🗡️</span>
+                    <span style={{ minWidth: 22, textAlign: "center" }}>
+                      <strong>{exp.foot}</strong>
+                    </span>
+                    <button style={btnStyle} onClick={() => adjustExp("foot", +1)}>
+                      +1
+                    </button>
+                    <button style={btnStyle} onClick={() => adjustExp("foot", -1)}>
+                      -1
+                    </button>
+                  </div>
+
+                  <div style={itemStyle}>
+                    <span>🐎</span>
+                    <span style={{ minWidth: 22, textAlign: "center" }}>
+                      <strong>{exp.cav}</strong>
+                    </span>
+                    <button style={btnStyle} onClick={() => adjustExp("cav", +1)}>
+                      +1
+                    </button>
+                    <button style={btnStyle} onClick={() => adjustExp("cav", -1)}>
+                      -1
+                    </button>
+                  </div>
+
+                  <div style={itemStyle}>
+                    <span>🏹</span>
+                    <span style={{ minWidth: 22, textAlign: "center" }}>
+                      <strong>{exp.arch}</strong>
+                    </span>
+                    <button style={btnStyle} onClick={() => adjustExp("arch", +1)}>
+                      +1
+                    </button>
+                    <button style={btnStyle} onClick={() => adjustExp("arch", -1)}>
+                      -1
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+
+          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
+            EXP kan niet onder 0. Als EXP = 0 voor een type → dat type telt niet mee in battle.
+          </div>
+        </section>
+
+        {/* Bank */}
+        <section style={{ ...ui.card, marginTop: 14 }}>
+          <h2 style={ui.cardTitle}>Bank</h2>
+
+          <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              type="number"
+              value={bankAmount}
+              onChange={(e) => setBankAmount(Number(e.target.value))}
+              style={{
+                width: 130,
+                padding: 8,
+                borderRadius: 10,
+                border: "1px solid rgba(243,231,207,0.18)",
+                background: "rgba(0,0,0,0.18)",
+                color: "#f3e7cf",
+              }}
+            />
+
+            <button onClick={() => bankAdjustCredits(Math.abs(bankAmount))} style={ui.button}>
+              + amount
+            </button>
+
+            <button onClick={() => bankAdjustCredits(-Math.abs(bankAmount))} style={ui.button}>
+              − amount
+            </button>
+          </div>
+
+          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => bankAdjustCredits(1000)} style={ui.button}>
+              +1000
+            </button>
+            <button onClick={() => bankAdjustCredits(10000)} style={ui.button}>
+              +10000
+            </button>
+            <button onClick={() => bankAdjustCredits(-1000)} style={ui.button}>
+              −1000
+            </button>
+            <button onClick={() => bankAdjustCredits(-10000)} style={ui.button}>
+              −10000
+            </button>
+          </div>
+
+          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
+            Elke bankactie wordt gelogd (host ziet de laatste 20).
+          </div>
+        </section>
+
+        {/* Shop */}
+        <section style={{ ...ui.card, marginTop: 14 }}>
+          <h2 style={ui.cardTitle}>Shop</h2>
+
+          <div style={{ marginBottom: 8, opacity: 0.85 }}>
+            Buys go to <strong>Basecamp</strong> (Tile #{basecamp?.id ?? "—"}).
+          </div>
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <label style={{ fontSize: 12 }}>
+              Footsoldiers ({SHOP_PRICES.foot})
+              <br />
+              <input
+                type="number"
+                min={0}
+                value={buyFoot}
+                onChange={(e) => setBuyFoot(Number(e.target.value))}
+                style={{
+                  width: 110,
+                  padding: 8,
+                  borderRadius: 10,
+                  border: "1px solid rgba(243,231,207,0.18)",
+                  background: "rgba(0,0,0,0.18)",
+                  color: "#f3e7cf",
+                }}
+              />
+            </label>
+
+            <label style={{ fontSize: 12 }}>
+              Cavalry ({SHOP_PRICES.cav})
+              <br />
+              <input
+                type="number"
+                min={0}
+                value={buyCav}
+                onChange={(e) => setBuyCav(Number(e.target.value))}
+                style={{
+                  width: 110,
+                  padding: 8,
+                  borderRadius: 10,
+                  border: "1px solid rgba(243,231,207,0.18)",
+                  background: "rgba(0,0,0,0.18)",
+                  color: "#f3e7cf",
+                }}
+              />
+            </label>
+
+            <label style={{ fontSize: 12 }}>
+              Archers ({SHOP_PRICES.arch})
+              <br />
+              <input
+                type="number"
+                min={0}
+                value={buyArch}
+                onChange={(e) => setBuyArch(Number(e.target.value))}
+                style={{
+                  width: 110,
+                  padding: 8,
+                  borderRadius: 10,
+                  border: "1px solid rgba(243,231,207,0.18)",
+                  background: "rgba(0,0,0,0.18)",
+                  color: "#f3e7cf",
+                }}
+              />
+            </label>
+          </div>
+
+          <div style={{ marginTop: 10 }}>
+            Total cost: <strong>{buyCost}</strong> credits
+          </div>
+
+          <button onClick={buyTroopsToBasecamp} style={{ ...ui.button, marginTop: 10, width: "fit-content" }}>
+            Buy (to basecamp)
+          </button>
+        </section>
+
+        {/* Dragonglass */}
+        <section style={{ ...ui.card, marginTop: 14 }}>
+          <h2 style={ui.cardTitle}>Special: Dragonglass</h2>
+
+          <div style={{ marginBottom: 8 }}>
+            Cost: <strong>{SHOP_PRICES.dragonglass}</strong> credits — You can own only <strong>1</strong>.
+          </div>
+
+          <div style={{ marginBottom: 8 }}>
+            Status: {player?.hasDragonglass ? <strong>✅ Owned 🔷</strong> : <strong>❌ Not owned</strong>}
+          </div>
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button
+              onClick={buyDragonglass}
+              disabled={!!player?.hasDragonglass}
+              style={{
+                ...ui.button,
+                cursor: player?.hasDragonglass ? "not-allowed" : "pointer",
+                opacity: player?.hasDragonglass ? 0.6 : 1,
+              }}
+            >
+              Buy Dragonglass
+            </button>
+
+            <button onClick={grantDragonglassFree} style={ui.button}>
+              🎴 Bamboozle free
+            </button>
+          </div>
+
+          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
+            Once purchased, you keep it until it gets destroyed in battle.
+          </div>
+        </section>
+
+        {/* Mage (buy/place) */}
+        <section style={{ ...ui.card, marginTop: 14 }}>
+          <h2 style={ui.cardTitle}>Special: Mage</h2>
+
+          <div style={{ marginBottom: 8 }}>
+            Cost: <strong>{SHOP_PRICES.mage}</strong> credits
+          </div>
+
+          {hasMage ? (
+            <div>
+              ✅ ✅ Mage owned {mage?.tileId ? <>on tile <strong>#{mage.tileId}</strong></> : null}
+              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
+                (Mage cannot be placed in basecamp and will never return to basecamp.)
+              </div>
+            </div>
+          ) : (
+            <>
+              <label style={{ fontSize: 12 }}>
+                Place Mage on (your controlled tile, not basecamp)
+                <br />
+                <select
+                  value={magePlaceTileId}
+                  onChange={(e) => setMagePlaceTileId(e.target.value)}
+                  style={{
+                    padding: 10,
+                    width: "100%",
+                    borderRadius: 12,
+                    border: "1px solid rgba(243,231,207,0.18)",
+                    background: "rgba(0,0,0,0.18)",
+                    color: "#f3e7cf",
+                  }}
+                >
+                  <option value="">— choose —</option>
+                  {tiles
+                    .filter((t) => !t.isBasecamp && t.ownerPlayerId === playerId)
+                    .map((t) => (
+                      <option key={t.id} value={t.id}>
+                        #{t.id}
+                      </option>
+                    ))}
+                </select>
+              </label>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+                <button
+                  onClick={buyAndPlaceMage}
+                  disabled={hasMage}
+                  style={{
+                    ...ui.button,
+                    cursor: hasMage ? "not-allowed" : "pointer",
+                    opacity: hasMage ? 0.6 : 1,
+                  }}
+                >
+                  Buy & Place Mage
+                </button>
+
+                <button
+                  onClick={grantAndPlaceMageFree}
+                  disabled={hasMage}
+                  style={{
+                    ...ui.button,
+                    cursor: hasMage ? "not-allowed" : "pointer",
+                    opacity: hasMage ? 0.6 : 1,
+                  }}
+                >
+                  🎴 Bamboozle free
+                </button>
+              </div>
+            </>
+          )}
+        </section>
+
+        {/* Dart reward */}
+        <section style={{ ...ui.card, marginTop: 14 }}>
+          <h2 style={ui.cardTitle}>🎯 Dart reward</h2>
+
+          <div style={{ marginBottom: 8, opacity: 0.85 }}>
+            Win a dart challenge → place <strong>+1 free archer</strong> on a tile you control (basecamp allowed).
+          </div>
+
+          <label style={{ fontSize: 12 }}>
+            Place archer on (your controlled tile or your basecamp)
+            <br />
+            <select
+              value={dartPlaceTileId}
+              onChange={(e) => setDartPlaceTileId(e.target.value)}
+              style={{
+                padding: 10,
+                width: "100%",
+                borderRadius: 12,
+                border: "1px solid rgba(243,231,207,0.18)",
+                background: "rgba(0,0,0,0.18)",
+                color: "#f3e7cf",
+              }}
+            >
+              <option value="">— choose —</option>
+              {ownedTileIds.map((id) => (
+                <option key={id} value={id}>
+                  #{id} (🗡️{deployments[id]?.foot ?? 0} 🐎{deployments[id]?.cav ?? 0} 🏹{deployments[id]?.arch ?? 0})
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <button onClick={addFreeArcherFromDart} style={{ ...ui.button, marginTop: 10, width: "fit-content" }}>
+            🎯 +1 Free Archer
+          </button>
+        </section>
+      </section>
+
+      {/* RIGHT: CONTROLS (moves) */}
+      <aside style={{ display: "grid", gap: 14 }}>
+        {/* Status */}
+        <section style={ui.card}>
+          <h2 style={ui.cardTitle}>Status</h2>
+
+          <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ fontSize: 18, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span>
+                {(player?.avatar ?? "🎲")} {player?.name ?? "—"}
+              </span>
+
+              {player?.hasDragonglass ? (
+                <span
+                  title="Dragonglass owned"
+                  style={{
+                    fontSize: 13,
+                    padding: "4px 10px",
+                    borderRadius: 999,
+                    border: "1px solid rgba(243,231,207,0.22)",
+                    background: "rgba(243,231,207,0.08)",
+                  }}
+                >
+                  🔷 Dragonglass
+                </span>
+              ) : null}
+            </div>
+
+            <div>
+              Credits: <strong>{Number(player?.credits ?? 0)}</strong>
+            </div>
+
+            <div>
+              🍺 <strong>Beercules:</strong> {Number(player?.beerCount ?? 0)}
+            </div>
+
+            <div>
+              Dominance: <strong>{((ownedTileIds.length / 60) * 100).toFixed(1)}%</strong>{" "}
+              <span style={{ opacity: 0.7 }}>({ownedTileIds.length}/60 tiles)</span>
+            </div>
+
+            <div style={{ fontSize: 12, opacity: 0.8 }}>Movement cost: 1000 credits per troop per tile</div>
+
+            <div>
+              <strong>Basecamp</strong>: {basecamp ? `Tile #${basecamp.id}` : "Waiting..."}
+            </div>
+          </div>
+        </section>
+
+        {/* Map Mode */}
+        <section style={ui.card}>
+          <h2 style={ui.cardTitle}>Map mode</h2>
+
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => {
+                setMapAction("MOVE");
+                setStatus("🗺️ Map klikmodus: MOVE (FROM → TO)");
+              }}
+              style={{
+                ...ui.button,
+                background: mapAction === "MOVE" ? "rgba(243,231,207,0.16)" : "rgba(243,231,207,0.07)",
+              }}
+            >
+              🪖 Move
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setMapAction("TP");
+                setStatus("🗺️ Map klikmodus: TELEPORT (TP FROM → TP TO)");
+              }}
+              style={{
+                ...ui.button,
+                background: mapAction === "TP" ? "rgba(243,231,207,0.16)" : "rgba(243,231,207,0.07)",
+              }}
+            >
+              🧙 Teleport
+            </button>
+          </div>
+        </section>
+
+        {/* Troop movement (moved up directly under Map mode) */}
+        <section style={ui.card}>
+          <h2 style={ui.cardTitle}>Troop movement</h2>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            <label style={{ fontSize: 12 }}>
+              FROM (your tile)
+              <br />
+              <select
+                value={fromTileId}
+                onChange={(e) => {
+                  setFromTileId(e.target.value);
+                  setToTileId("");
+                }}
+                style={{
+                  padding: 10,
+                  width: "100%",
+                  borderRadius: 12,
+                  border: "1px solid rgba(243,231,207,0.18)",
+                  background: "rgba(0,0,0,0.18)",
+                  color: "#f3e7cf",
+                }}
+              >
+                <option value="">— choose —</option>
+                {ownedTileIds.map((id) => (
+                  <option key={id} value={id}>
+                    #{id} (🗡️{deployments[id]?.foot ?? 0} 🐎{deployments[id]?.cav ?? 0} 🏹{deployments[id]?.arch ?? 0})
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label style={{ fontSize: 12 }}>
+              TO (adjacent)
+              <br />
+              <select
+                value={toTileId}
+                onChange={(e) => setToTileId(e.target.value)}
+                disabled={!fromTileId}
+                style={{
+                  padding: 10,
+                  width: "100%",
+                  borderRadius: 12,
+                  border: "1px solid rgba(243,231,207,0.18)",
+                  background: !fromTileId ? "rgba(0,0,0,0.10)" : "rgba(0,0,0,0.18)",
+                  color: "#f3e7cf",
+                  opacity: !fromTileId ? 0.7 : 1,
+                }}
+              >
+                <option value="">— choose —</option>
+                {toOptions.map((id) => (
+                  <option key={id} value={id}>
+                    #{id}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div
+              style={{
+                border: "1px solid rgba(243,231,207,0.16)",
+                borderRadius: 12,
+                padding: 12,
+                background: "rgba(0,0,0,0.10)",
+              }}
+            >
+              <div style={{ marginBottom: 8 }}>
+                Available on FROM: 🗡️{fromTroops.foot} 🐎{fromTroops.cav} 🏹{fromTroops.arch}
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <label style={{ fontSize: 12 }}>
+                  Foot
+                  <br />
+                  <input
+                    type="number"
+                    min={0}
+                    value={moveFoot}
+                    onChange={(e) => setMoveFoot(Number(e.target.value))}
+                    style={{
+                      width: 90,
+                      padding: 8,
+                      borderRadius: 10,
+                      border: "1px solid rgba(243,231,207,0.18)",
+                      background: "rgba(0,0,0,0.18)",
+                      color: "#f3e7cf",
+                    }}
+                  />
+                </label>
+
+                <label style={{ fontSize: 12 }}>
+                  Cav
+                  <br />
+                  <input
+                    type="number"
+                    min={0}
+                    value={moveCav}
+                    onChange={(e) => setMoveCav(Number(e.target.value))}
+                    style={{
+                      width: 90,
+                      padding: 8,
+                      borderRadius: 10,
+                      border: "1px solid rgba(243,231,207,0.18)",
+                      background: "rgba(0,0,0,0.18)",
+                      color: "#f3e7cf",
+                    }}
+                  />
+                </label>
+
+                <label style={{ fontSize: 12 }}>
+                  Arch
+                  <br />
+                  <input
+                    type="number"
+                    min={0}
+                    value={moveArch}
+                    onChange={(e) => setMoveArch(Number(e.target.value))}
+                    style={{
+                      width: 90,
+                      padding: 8,
+                      borderRadius: 10,
+                      border: "1px solid rgba(243,231,207,0.18)",
+                      background: "rgba(0,0,0,0.18)",
+                      color: "#f3e7cf",
+                    }}
+                  />
+                </label>
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                Cost: <strong>{moveCost}</strong> credits
+              </div>
+            </div>
+
+            <button onClick={moveTroops} style={{ ...ui.button, width: "fit-content" }}>
+              Move troops
+            </button>
+
+            {status ? <div style={{ marginTop: 6, fontSize: 13, opacity: 0.95 }}>{status}</div> : null}
+          </div>
+        </section>
+
+        {/* Teleport move (under troop movement) */}
+        <section style={ui.card}>
+          <h2 style={ui.cardTitle}>Mage teleport move</h2>
+
+          {!mage ? (
+            <div style={{ opacity: 0.85 }}>❌ You don’t own a Mage yet.</div>
+          ) : (
+            <>
+              <div style={{ marginBottom: 8 }}>
+                Mage on tile: <strong>#{mage.tileId}</strong> — Teleport cost = 1000 credits per troop
+              </div>
+
+              <label style={{ fontSize: 12 }}>
+                FROM (your tile or your basecamp)
+                <br />
+                <select
+                  value={tpFromTileId}
+                  onChange={(e) => setTpFromTileId(e.target.value)}
+                  style={{
+                    padding: 10,
+                    width: "100%",
+                    borderRadius: 12,
+                    border: "1px solid rgba(243,231,207,0.18)",
+                    background: "rgba(0,0,0,0.18)",
+                    color: "#f3e7cf",
+                  }}
+                >
+                  <option value="">— choose —</option>
+                  {ownedTileIds.map((id) => (
+                    <option key={id} value={id}>
+                      #{id} (🗡️{deployments[id]?.foot ?? 0} 🐎{deployments[id]?.cav ?? 0} 🏹{deployments[id]?.arch ?? 0})
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label style={{ fontSize: 12, marginTop: 10, display: "block" }}>
+                TO (any tile, no basecamps)
+                <br />
+                <select
+                  value={tpToTileId}
+                  onChange={(e) => setTpToTileId(e.target.value)}
+                  style={{
+                    padding: 10,
+                    width: "100%",
+                    borderRadius: 12,
+                    border: "1px solid rgba(243,231,207,0.18)",
+                    background: "rgba(0,0,0,0.18)",
+                    color: "#f3e7cf",
+                  }}
+                >
+                  <option value="">— choose —</option>
+                  {tiles
+                    .filter((t) => !t.isBasecamp)
+                    .map((t) => (
+                      <option key={t.id} value={t.id}>
+                        #{t.id}
+                      </option>
+                    ))}
+                </select>
+              </label>
+
+              <div style={{ marginTop: 8, opacity: 0.85 }}>
+                Available on FROM: 🗡️{tpFromTroops.foot} 🐎{tpFromTroops.cav} 🏹{tpFromTroops.arch}
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
+                <label style={{ fontSize: 12 }}>
+                  Foot
+                  <br />
+                  <input
+                    type="number"
+                    min={0}
+                    value={tpFoot}
+                    onChange={(e) => setTpFoot(Number(e.target.value))}
+                    style={{
+                      width: 90,
+                      padding: 8,
+                      borderRadius: 10,
+                      border: "1px solid rgba(243,231,207,0.18)",
+                      background: "rgba(0,0,0,0.18)",
+                      color: "#f3e7cf",
+                    }}
+                  />
+                </label>
+
+                <label style={{ fontSize: 12 }}>
+                  Cav
+                  <br />
+                  <input
+                    type="number"
+                    min={0}
+                    value={tpCav}
+                    onChange={(e) => setTpCav(Number(e.target.value))}
+                    style={{
+                      width: 90,
+                      padding: 8,
+                      borderRadius: 10,
+                      border: "1px solid rgba(243,231,207,0.18)",
+                      background: "rgba(0,0,0,0.18)",
+                      color: "#f3e7cf",
+                    }}
+                  />
+                </label>
+
+                <label style={{ fontSize: 12 }}>
+                  Arch
+                  <br />
+                  <input
+                    type="number"
+                    min={0}
+                    value={tpArch}
+                    onChange={(e) => setTpArch(Number(e.target.value))}
+                    style={{
+                      width: 90,
+                      padding: 8,
+                      borderRadius: 10,
+                      border: "1px solid rgba(243,231,207,0.18)",
+                      background: "rgba(0,0,0,0.18)",
+                      color: "#f3e7cf",
+                    }}
+                  />
+                </label>
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                Cost: <strong>{tpCost}</strong> credits
+              </div>
+
+              <button onClick={teleportMoveWithMage} style={{ ...ui.button, marginTop: 10, width: "fit-content" }}>
+                Teleport move
+              </button>
+            </>
+          )}
+        </section>
+
+        {/* Move Mage adjacent (under teleport) */}
+        <section style={ui.card}>
+          <h2 style={ui.cardTitle}>Move Mage (adjacent)</h2>
+
+          {!mage ? (
+            <div style={{ opacity: 0.85 }}>❌ You don’t own a Mage yet.</div>
+          ) : (
+            <>
+              <div style={{ marginBottom: 8 }}>
+                Mage currently on: <strong>#{mage.tileId}</strong> — Cost: <strong>1000</strong> credits
+              </div>
+
+              <label style={{ fontSize: 12 }}>
+                TO (adjacent, must be your tile)
+                <br />
+                <select
+                  value={mageMoveToTileId}
+                  onChange={(e) => setMageMoveToTileId(e.target.value)}
+                  style={{
+                    padding: 10,
+                    width: "100%",
+                    borderRadius: 12,
+                    border: "1px solid rgba(243,231,207,0.18)",
+                    background: "rgba(0,0,0,0.18)",
+                    color: "#f3e7cf",
+                  }}
+                >
+                  <option value="">— choose —</option>
+                  {mageMoveOptions.map((id) => (
+                    <option key={id} value={id}>
+                      #{id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <button onClick={moveMageAdjacent} style={{ ...ui.button, marginTop: 10, width: "fit-content" }}>
+                Move Mage
+              </button>
+            </>
+          )}
+        </section>
+
+        {/* Beercules (stays under moves) */}
+        <section style={ui.card}>
+          <h2 style={ui.cardTitle}>🍺 Beercules</h2>
+
+          <div style={{ marginBottom: 8, opacity: 0.85 }}>
+            Drink a pint → your <strong>Beercules</strong> counter goes up by 1, and you choose a reward.
+          </div>
+
+          <div style={{ display: "grid", gap: 8 }}>
+            <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                type="radio"
+                name="beerculesReward"
+                checked={beerculesReward === "CREDITS"}
+                onChange={() => setBeerculesReward("CREDITS")}
+              />
+              +5000 credits
+            </label>
+
+            <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                type="radio"
+                name="beerculesReward"
+                checked={beerculesReward === "EXP"}
+                onChange={() => setBeerculesReward("EXP")}
+              />
+              +1 EXP (choose troop type)
+            </label>
+
+            {beerculesReward === "EXP" && (
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", paddingLeft: 22 }}>
+                <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <input
+                    type="radio"
+                    name="beerculesExpType"
+                    checked={beerculesExpType === "foot"}
+                    onChange={() => setBeerculesExpType("foot")}
+                  />
+                  🗡️ Foot
+                </label>
+
+                <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <input
+                    type="radio"
+                    name="beerculesExpType"
+                    checked={beerculesExpType === "cav"}
+                    onChange={() => setBeerculesExpType("cav")}
+                  />
+                  🐎 Cav
+                </label>
+
+                <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <input
+                    type="radio"
+                    name="beerculesExpType"
+                    checked={beerculesExpType === "arch"}
+                    onChange={() => setBeerculesExpType("arch")}
+                  />
+                  🏹 Arch
+                </label>
+              </div>
+            )}
+
+            <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                type="radio"
+                name="beerculesReward"
+                checked={beerculesReward === "BAMBOOZLE"}
+                onChange={() => setBeerculesReward("BAMBOOZLE")}
+              />
+              Draw 1 Bamboozle card (physical)
+            </label>
+          </div>
+
+          <button onClick={drinkBeerculesPint} style={{ ...ui.button, marginTop: 12, width: "fit-content" }}>
+            🍺 Drink Pint (Beercules +1)
+          </button>
+        </section>
+      </aside>
+    </div>
+  </main>
+);
 
 }
