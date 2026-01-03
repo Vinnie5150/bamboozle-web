@@ -33,12 +33,16 @@ export default function StartPositionPage() {
   const [tiles, setTiles] = useState<Tile[]>([]);
   const [basecamp, setBasecamp] = useState<Tile | null>(null);
 
-  const [startUnits, setStartUnits] = useState<{ foot: number; cav: number; arch: number } | null>(null);
+  const [startUnits, setStartUnits] = useState<{ foot: number; cav: number; arch: number } | null>(
+    null
+  );
   const [startReady, setStartReady] = useState(false);
 
-  const [deployments, setDeployments] = useState<Record<string, { foot: number; cav: number; arch: number }>>({});
+  const [deployments, setDeployments] = useState<
+    Record<string, { foot: number; cav: number; arch: number }>
+  >({});
 
-  // Start phase timer state
+  // Start phase timer state (UI/locking only)
   const [startEndsAtMs, setStartEndsAtMs] = useState<number | null>(null);
   const [startActive, setStartActive] = useState(false);
   const [nowMs, setNowMs] = useState<number>(Date.now());
@@ -65,27 +69,25 @@ export default function StartPositionPage() {
     return () => unsub();
   }, []);
 
-  // Local ticking clock for countdown
+  // Local ticking clock for countdown display
   useEffect(() => {
     const t = setInterval(() => setNowMs(Date.now()), 250);
     return () => clearInterval(t);
   }, []);
 
   const timeLeftSec =
-    startEndsAtMs !== null
-      ? Math.max(0, Math.ceil((startEndsAtMs - nowMs) / 1000))
-      : null;
+    startEndsAtMs !== null ? Math.max(0, Math.ceil((startEndsAtMs - nowMs) / 1000)) : null;
 
-  // start is locked if:
+  // lock claim/deploy when:
   // - player already startReady
-  // - host locked startActive false
+  // - start phase not active
   // - timer elapsed
   const startLockedByTime = startEndsAtMs !== null && nowMs >= startEndsAtMs;
   const isLocked = startReady || !startActive || startLockedByTime;
 
   // -----------------------------
   // Listen: game doc (startClaim)
-  // + auto redirect when start becomes inactive / time elapsed
+  // NOTE: NO redirects from here.
   // -----------------------------
   useEffect(() => {
     if (!authReady) return;
@@ -93,25 +95,19 @@ export default function StartPositionPage() {
     const gameRef = doc(db, "games", gameId);
 
     const unsub = onSnapshot(gameRef, (snap) => {
-      const data = snap.data() as any;
+      const data = (snap.data() as any) ?? {};
       const startClaim = data?.startClaim ?? null;
 
       const active = !!startClaim?.active;
       setStartActive(active);
 
-      const endsAt = startClaim?.endsAt?.toDate?.()
-        ? startClaim.endsAt.toDate()
-        : null;
-
+      const endsAt = startClaim?.endsAt?.toDate?.() ? startClaim.endsAt.toDate() : null;
       setStartEndsAtMs(endsAt ? endsAt.getTime() : null);
-
-     
     });
 
     return () => unsub();
-  }, [authReady, gameId, playerId, router]);
+  }, [authReady, gameId]);
 
-  
   // -----------------------------
   // Listen: tiles
   // -----------------------------
@@ -122,9 +118,7 @@ export default function StartPositionPage() {
       const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }) as Tile);
       setTiles(list);
 
-      const bc =
-        list.find((t) => t.isBasecamp && t.basecampOwnerPlayerId === playerId) ?? null;
-
+      const bc = list.find((t) => t.isBasecamp && t.basecampOwnerPlayerId === playerId) ?? null;
       setBasecamp(bc);
     });
 
@@ -133,7 +127,7 @@ export default function StartPositionPage() {
 
   // -----------------------------
   // Listen: player doc (startReady + startUnits)
-  // + auto redirect when host sets startReady true (Finalize & fill remainder)
+  // NOTE: NO redirects from here.
   // -----------------------------
   useEffect(() => {
     if (!authReady) return;
@@ -141,16 +135,10 @@ export default function StartPositionPage() {
     const playerRef = doc(db, "games", gameId, "players", playerId);
 
     const unsub = onSnapshot(playerRef, (snap) => {
-      const data = snap.data() as any;
+      const data = (snap.data() as any) ?? {};
 
       const ready = !!data?.startReady;
       setStartReady(ready);
-
-      // ✅ Host “Finalize start + fill remainder” will set startReady true -> redirect automatically
-      if (ready) {
-        router.replace(`/play/${gameId}/${playerId}`);
-        return;
-      }
 
       const su = data?.startUnits ?? data?.units ?? null;
       if (su) {
@@ -165,7 +153,7 @@ export default function StartPositionPage() {
     });
 
     return () => unsub();
-  }, [authReady, gameId, playerId, router]);
+  }, [authReady, gameId, playerId]);
 
   // -----------------------------
   // Listen: deployments
@@ -209,10 +197,10 @@ export default function StartPositionPage() {
     setStatus("Claiming...");
 
     const basecampId = basecamp.id;
-    const isAdjacent = isNeighbor(String(basecampId), String(tileId));
+    const adjacent = isNeighbor(String(basecampId), String(tileId));
     const isBasecampTile = tileId === basecampId;
 
-    if (!isBasecampTile && !isAdjacent) {
+    if (!isBasecampTile && !adjacent) {
       setStatus("❌ Only basecamp or adjacent tiles are allowed");
       return;
     }
@@ -344,7 +332,7 @@ export default function StartPositionPage() {
       { merge: true }
     );
 
-    // ✅ immediate redirect; also covered by snapshot listener
+    // ✅ ONLY redirect that exists in this page:
     router.replace(`/play/${gameId}/${playerId}`);
   }
 
@@ -393,8 +381,7 @@ export default function StartPositionPage() {
           Start phase: <strong>{startActive ? "ACTIVE" : "INACTIVE"}</strong>
         </div>
         <div>
-          Time left:{" "}
-          <strong>{timeLeftSec === null ? "-" : `${timeLeftSec}s`}</strong>
+          Time left: <strong>{timeLeftSec === null ? "-" : `${timeLeftSec}s`}</strong>
         </div>
 
         <div style={{ marginTop: 8 }}>
@@ -405,19 +392,17 @@ export default function StartPositionPage() {
         </div>
 
         <div>
-          <strong>Deployed:</strong> Foot {deployedTotals.foot}, Cav{" "}
-          {deployedTotals.cav}, Arch {deployedTotals.arch}
+          <strong>Deployed:</strong> Foot {deployedTotals.foot}, Cav {deployedTotals.cav}, Arch{" "}
+          {deployedTotals.arch}
         </div>
 
         <div>
           <strong>Remaining:</strong>{" "}
-          {remaining
-            ? `Foot ${remaining.foot}, Cav ${remaining.cav}, Arch ${remaining.arch}`
-            : "—"}
+          {remaining ? `Foot ${remaining.foot}, Cav ${remaining.cav}, Arch ${remaining.arch}` : "—"}
         </div>
 
         {!authReady && <div style={{ marginTop: 8 }}>🔐 Logging in...</div>}
-        {isLocked && <div style={{ marginTop: 8 }}>⏱️ Locked.</div>}
+        {isLocked && <div style={{ marginTop: 8 }}>⏱️ Locked (claim/deploy disabled).</div>}
       </div>
 
       {!basecamp && <p style={{ marginTop: 12 }}>Waiting for basecamp assignment...</p>}
@@ -435,7 +420,7 @@ export default function StartPositionPage() {
               const isOwn = t?.ownerPlayerId === playerId;
               const isTakenByOther = !!t?.ownerPlayerId && t?.ownerPlayerId !== playerId;
 
-              const label = id === basecamp.id ? `🏠 Basecamp (#${id})` : `Tile #${id}`;
+              const label = id === basecamp?.id ? `🏠 Basecamp (#${id})` : `Tile #${id}`;
 
               return (
                 <div
@@ -514,23 +499,21 @@ export default function StartPositionPage() {
       )}
 
       <button
-          onClick={markReady}
-          disabled={!authReady || startReady}
-          style={{
-            marginTop: 16,
-            padding: "10px 16px",
-            border: "1px solid black",
-            borderRadius: 8,
-            cursor: !authReady || startReady ? "not-allowed" : "pointer",
-            opacity: !authReady || startReady ? 0.5 : 1,
-          }}
-        >
-          I’m ready (lock in)
-        </button>
-
+        onClick={markReady}
+        disabled={!authReady || startReady}
+        style={{
+          marginTop: 16,
+          padding: "10px 16px",
+          border: "1px solid black",
+          borderRadius: 8,
+          cursor: !authReady || startReady ? "not-allowed" : "pointer",
+          opacity: !authReady || startReady ? 0.5 : 1,
+        }}
+      >
+        I’m ready (lock in)
+      </button>
 
       <p style={{ marginTop: 16 }}>{status}</p>
     </main>
   );
 }
-

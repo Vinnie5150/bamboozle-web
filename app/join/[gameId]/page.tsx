@@ -40,19 +40,25 @@ export default function JoinGamePage() {
     setStatus("Joining game...");
 
     try {
-      // ✅ capture the created player doc ref so we have playerId
       const ref = await addDoc(collection(db, "games", gameId, "players"), {
-        name: name.trim(),
-        avatar,
-        credits: 0,
-        dominance: 0,
-        units: {
-          foot: 0,
-          cav: 0,
-          arch: 0,
-        },
-        createdAt: serverTimestamp(),
-      });
+          name: name.trim(),
+          avatar,
+
+          // start phase flags (IMPORTANT)
+          startReady: false,
+          startReadyAt: null,
+
+          // optional but helpful: keep startUnits separate so UI never reads "units"
+          startUnits: { foot: 0, cav: 0, arch: 0 },
+
+          // game stats
+          credits: 0,
+          dominance: 0,
+          units: { foot: 0, cav: 0, arch: 0 },
+
+          createdAt: serverTimestamp(),
+        });
+
 
       const playerId = ref.id;
 
