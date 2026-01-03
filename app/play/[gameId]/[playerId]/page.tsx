@@ -165,8 +165,7 @@ export default function PlayPage() {
     // mage teleport UI
   const [tpFromTileId, setTpFromTileId] = useState<string>("");
   const [tpToTileId, setTpToTileId] = useState<string>("");
-    // mage reposition (adjacent move, no teleport)
-  const [mageMoveToTileId, setMageMoveToTileId] = useState<string>("");
+  
 
 
   const [tpFoot, setTpFoot] = useState<number>(0);
@@ -445,10 +444,7 @@ useEffect(() => {
     return neighbors(Number(fromTileId));
   }, [fromTileId]);
 
-    const mageMoveOptions = useMemo(() => {
-    if (!mage?.tileId) return [];
-    return neighbors(Number(mage.tileId));
-  }, [mage?.tileId]);
+    
 
 
   const moveCount = Math.max(0, moveFoot) + Math.max(0, moveCav) + Math.max(0, moveArch);
@@ -630,458 +626,466 @@ function applyWinnerSurvivors(t: { foot: number; cav: number; arch: number }, di
   };
 }
 
+async function moveTroops() {
+  setStatus("");
 
-  async function moveTroops() {
-    setStatus("");
+  if (!fromTileId || !toTileId) {
+    setStatus("❌ Kies een FROM en TO tile.");
+    return;
+  }
+  if (toTileId === fromTileId) {
+    setStatus("❌ TO mag niet dezelfde zijn als FROM.");
+    return;
+  }
 
-    if (!fromTileId || !toTileId) {
-      setStatus("❌ Kies een FROM en TO tile.");
-      return;
-    }
-    if (toTileId === fromTileId) {
-      setStatus("❌ TO mag niet dezelfde zijn als FROM.");
-      return;
-    }
+  const allowed = neighbors(Number(fromTileId)).includes(toTileId);
+  if (!allowed) {
+    setStatus("❌ TO moet adjacent zijn aan FROM.");
+    return;
+  }
 
-    const allowed = neighbors(Number(fromTileId)).includes(toTileId);
-    if (!allowed) {
-      setStatus("❌ TO moet adjacent zijn aan FROM.");
-      return;
-    }
+  const m = {
+    foot: Math.max(0, Math.floor(Number(moveFoot) || 0)),
+    cav: Math.max(0, Math.floor(Number(moveCav) || 0)),
+    arch: Math.max(0, Math.floor(Number(moveArch) || 0)),
+  };
 
-    const m = {
-      foot: Math.max(0, Math.floor(Number(moveFoot) || 0)),
-      cav: Math.max(0, Math.floor(Number(moveCav) || 0)),
-      arch: Math.max(0, Math.floor(Number(moveArch) || 0)),
-    };
+  const total = m.foot + m.cav + m.arch;
+  if (total <= 0) {
+    setStatus("❌ Kies minstens 1 troep om te verplaatsen.");
+    return;
+  }
 
-    const total = m.foot + m.cav + m.arch;
-    if (total <= 0) {
-      setStatus("❌ Kies minstens 1 troep om te verplaatsen.");
-      return;
-    }
+  const from = deployments[fromTileId] ?? { foot: 0, cav: 0, arch: 0 };
+  if (m.foot > from.foot || m.cav > from.cav || m.arch > from.arch) {
+    setStatus("❌ Niet genoeg troops op FROM tile.");
+    return;
+  }
 
-    const from = deployments[fromTileId] ?? { foot: 0, cav: 0, arch: 0 };
-    if (m.foot > from.foot || m.cav > from.cav || m.arch > from.arch) {
-      setStatus("❌ Niet genoeg troops op FROM tile.");
-      return;
-    }
+  const cost = total * 1000;
+  setStatus("Moving...");
 
-    const cost = total * 1000;
-    setStatus("Moving...");
+  const playerRef = doc(db, "games", gameId, "players", playerId);
+  const fromRef = doc(db, "games", gameId, "deployments", playerId, "tiles", fromTileId);
+  const toRef = doc(db, "games", gameId, "deployments", playerId, "tiles", toTileId);
 
-    const playerRef = doc(db, "games", gameId, "players", playerId);
-    const fromRef = doc(db, "games", gameId, "deployments", playerId, "tiles", fromTileId);
-    const toRef = doc(db, "games", gameId, "deployments", playerId, "tiles", toTileId);
+  const tileRef = doc(db, "games", gameId, "tiles", toTileId);
+  const fromTileRef = doc(db, "games", gameId, "tiles", fromTileId);
 
-    const tileRef = doc(db, "games", gameId, "tiles", toTileId);
-    const fromTileRef = doc(db, "games", gameId, "tiles", fromTileId);
+  let didBattle = false;
+  let uiMessage = "";
 
+  try {
+    await runTransaction(db, async (tx) => {
+      // ===== READS FIRST =====
+      const pSnap = await tx.get(playerRef);
+      if (!pSnap.exists()) throw new Error("Player not found");
+      const credits = Number((pSnap.data() as any)?.credits ?? 0);
+      if (credits < cost) throw new Error("Not enough credits");
 
-    let didBattle = false;
-    let uiMessage = "";
+      const fromTileSnap = await tx.get(fromTileRef);
+      if (!fromTileSnap.exists()) throw new Error("FROM tile not found");
+      const fromTile = fromTileSnap.data() as any;
+      const fromTileIsBasecamp = !!fromTile.isBasecamp;
+      const fromTileOwner: string | null = fromTile.ownerPlayerId ?? null;
 
-    try {
-      await runTransaction(db, async (tx) => {
-        // ===== READS FIRST =====
-        const pSnap = await tx.get(playerRef);
-        if (!pSnap.exists()) throw new Error("Player not found");
-        const credits = Number((pSnap.data() as any)?.credits ?? 0);
-        if (credits < cost) throw new Error("Not enough credits");
+      const tileSnap = await tx.get(tileRef);
+      if (!tileSnap.exists()) throw new Error("Tile not found");
+      const tile = tileSnap.data() as any;
 
-        const fromTileSnap = await tx.get(fromTileRef);
-        if (!fromTileSnap.exists()) throw new Error("FROM tile not found");
-        const fromTile = fromTileSnap.data() as any;
-        const fromTileIsBasecamp = !!fromTile.isBasecamp;
-        const fromTileOwner: string | null = fromTile.ownerPlayerId ?? null;
+      const toOwner: string | null = tile.ownerPlayerId ?? null;
+      const toIsBasecamp = !!tile.isBasecamp;
+      const toBasecampOwner = tile.basecampOwnerPlayerId ?? null;
 
-        const tileSnap = await tx.get(tileRef);
-        if (!tileSnap.exists()) throw new Error("Tile not found");
-        const tile = tileSnap.data() as any;
+      if (toIsBasecamp && toBasecampOwner !== playerId) {
+        throw new Error("You cannot enter an enemy basecamp");
+      }
 
-        const toOwner: string | null = tile.ownerPlayerId ?? null;
-        const toIsBasecamp = !!tile.isBasecamp;
-        const toBasecampOwner = tile.basecampOwnerPlayerId ?? null;
+      const fSnap = await tx.get(fromRef);
+      const f = (fSnap.exists() ? (fSnap.data() as any) : {}) as any;
+      const fTroops = {
+        foot: Number(f.foot ?? 0),
+        cav: Number(f.cav ?? 0),
+        arch: Number(f.arch ?? 0),
+      };
 
-        if (toIsBasecamp && toBasecampOwner !== playerId) {
-          throw new Error("You cannot enter an enemy basecamp");
-        }
+      if (m.foot > fTroops.foot || m.cav > fTroops.cav || m.arch > fTroops.arch) {
+        throw new Error("Not enough troops on FROM tile");
+      }
 
-        const fSnap = await tx.get(fromRef);
-        const f = (fSnap.exists() ? (fSnap.data() as any) : {}) as any;
-        const fTroops = {
-          foot: Number(f.foot ?? 0),
-          cav: Number(f.cav ?? 0),
-          arch: Number(f.arch ?? 0),
-        };
+      const nextFrom = {
+        foot: fTroops.foot - m.foot,
+        cav: fTroops.cav - m.cav,
+        arch: fTroops.arch - m.arch,
+      };
+      const fromBecomesEmpty = nextFrom.foot + nextFrom.cav + nextFrom.arch <= 0;
 
-        if (m.foot > fTroops.foot || m.cav > fTroops.cav || m.arch > fTroops.arch) {
-          throw new Error("Not enough troops on FROM tile");
-        }
+      const toSnap = await tx.get(toRef);
+      const toData = (toSnap.exists() ? (toSnap.data() as any) : {}) as any;
+      const toTroops = {
+        foot: Number(toData.foot ?? 0),
+        cav: Number(toData.cav ?? 0),
+        arch: Number(toData.arch ?? 0),
+      };
 
-        const nextFrom = {
-          foot: fTroops.foot - m.foot,
-          cav: fTroops.cav - m.cav,
-          arch: fTroops.arch - m.arch,
-        };
-        const fromBecomesEmpty = nextFrom.foot + nextFrom.cav + nextFrom.arch <= 0;
+      // defender troops only needed if enemy
+      let defRef: any = null;
+      let defTroops: Troops = { foot: 0, cav: 0, arch: 0 };
 
-        const toSnap = await tx.get(toRef);
-        const toData = (toSnap.exists() ? (toSnap.data() as any) : {}) as any;
-        const toTroops = {
-          foot: Number(toData.foot ?? 0),
-          cav: Number(toData.cav ?? 0),
-          arch: Number(toData.arch ?? 0),
-        };
+      const isEmptyOrOwn = !toOwner || toOwner === playerId;
 
-        // defender troops only needed if enemy
-        let defRef: any = null;
-        let defTroops: Troops = { foot: 0, cav: 0, arch: 0 };
+      let defMageRef: any = null;
+      let defenderMageOnThisTile = false;
 
-        const isEmptyOrOwn = !toOwner || toOwner === playerId;
-
-        let defMageRef: any = null;
-        let defenderMageOnThisTile = false;
-
-        if (!isEmptyOrOwn) {
+      if (!isEmptyOrOwn) {
         defRef = doc(db, "games", gameId, "deployments", toOwner, "tiles", toTileId);
         const dSnap = await tx.get(defRef);
         const d = (dSnap.exists() ? (dSnap.data() as any) : {}) as any;
 
         defTroops = {
-        foot: Number(d.foot ?? 0),
-        cav: Number(d.cav ?? 0),
-        arch: Number(d.arch ?? 0),
+          foot: Number(d.foot ?? 0),
+          cav: Number(d.cav ?? 0),
+          arch: Number(d.arch ?? 0),
         };
 
-  // ✅ check of defender mage op deze tile staat
-  defMageRef = doc(db, "games", gameId, "mages", toOwner);
-  const defMageSnap = await tx.get(defMageRef);
-  if (defMageSnap.exists()) {
-    const md = defMageSnap.data() as any;
-    defenderMageOnThisTile = String(md.tileId ?? "") === String(toTileId);
-  }
-}
+        // ✅ check of defender mage op deze tile staat
+        defMageRef = doc(db, "games", gameId, "mages", toOwner);
+        const defMageSnap = await tx.get(defMageRef);
+        if (defMageSnap.exists()) {
+          const md = defMageSnap.data() as any;
+          defenderMageOnThisTile = String(md.tileId ?? "") === String(toTileId);
+        }
+      }
 
+      // ===== DECISION =====
+      const attExp = {
+        foot: Math.max(0, Math.floor(Number((pSnap.data() as any)?.exp?.foot ?? 0))),
+        cav: Math.max(0, Math.floor(Number((pSnap.data() as any)?.exp?.cav ?? 0))),
+        arch: Math.max(0, Math.floor(Number((pSnap.data() as any)?.exp?.arch ?? 0))),
+      };
 
-        // ===== DECISION =====
-        // attacker exp = from own player doc (pSnap)
-const attExp = {
-  foot: Math.max(0, Math.floor(Number((pSnap.data() as any)?.exp?.foot ?? 0))),
-  cav: Math.max(0, Math.floor(Number((pSnap.data() as any)?.exp?.cav ?? 0))),
-  arch: Math.max(0, Math.floor(Number((pSnap.data() as any)?.exp?.arch ?? 0))),
-};
+      let defExp = { foot: 0, cav: 0, arch: 0 };
+      if (!isEmptyOrOwn && toOwner) {
+        const defPlayerRef = doc(db, "games", gameId, "players", toOwner);
+        const defPlayerSnap = await tx.get(defPlayerRef);
+        if (defPlayerSnap.exists()) {
+          const dp = defPlayerSnap.data() as any;
+          defExp = {
+            foot: Math.max(0, Math.floor(Number(dp?.exp?.foot ?? 0))),
+            cav: Math.max(0, Math.floor(Number(dp?.exp?.cav ?? 0))),
+            arch: Math.max(0, Math.floor(Number(dp?.exp?.arch ?? 0))),
+          };
+        }
+      }
 
-// defender exp: default 0 als neutral/unknown
-let defExp = { foot: 0, cav: 0, arch: 0 };
+      const attackerPower =
+        (m.foot * attExp.foot) / 3 +
+        (m.cav * attExp.cav) / 3 +
+        (m.arch * attExp.arch) / 3;
 
-if (!isEmptyOrOwn && toOwner) {
-  const defPlayerRef = doc(db, "games", gameId, "players", toOwner);
-  const defPlayerSnap = await tx.get(defPlayerRef);
-  if (defPlayerSnap.exists()) {
-    const dp = defPlayerSnap.data() as any;
-    defExp = {
-      foot: Math.max(0, Math.floor(Number(dp?.exp?.foot ?? 0))),
-      cav: Math.max(0, Math.floor(Number(dp?.exp?.cav ?? 0))),
-      arch: Math.max(0, Math.floor(Number(dp?.exp?.arch ?? 0))),
-    };
-  }
-}
+      const defenderPower =
+        (defTroops.foot * defExp.foot) / 3 +
+        (defTroops.cav * defExp.cav) / 3 +
+        (defTroops.arch * defExp.arch) / 3;
 
-const attackerPower =
-  (m.foot * attExp.foot) / 3 +
-  (m.cav * attExp.cav) / 3 +
-  (m.arch * attExp.arch) / 3;
+      const diff = attackerPower - defenderPower;
+      const margin = Math.abs(diff);
 
-const defenderPower =
-  (defTroops.foot * defExp.foot) / 3 +
-  (defTroops.cav * defExp.cav) / 3 +
-  (defTroops.arch * defExp.arch) / 3;
+      const attackerDiv = winnerDivisor(margin);
+      const defenderDiv = defenderWinDivisor(margin);
 
-const diff = attackerPower - defenderPower;
-const margin = Math.abs(diff);
+      const battleOutcome =
+        attackerPower > defenderPower
+          ? "ATTACKER"
+          : attackerPower < defenderPower
+          ? "DEFENDER"
+          : "DRAW";
 
-// bestaand gedrag voor attacker-win (laat je zoals het was)
-const attackerDiv = winnerDivisor(margin);
+      const attackerSurvivors = applyWinnerSurvivors(m, attackerDiv);
+      const defenderSurvivors =
+        battleOutcome === "DEFENDER"
+          ? applyWinnerSurvivors(defTroops, defenderDiv)
+          : applyWinnerSurvivors(defTroops, attackerDiv);
 
-// nieuw gedrag voor defender-win
-const defenderDiv = defenderWinDivisor(margin);
+      const attackerSurvivorsTotal =
+        attackerSurvivors.foot + attackerSurvivors.cav + attackerSurvivors.arch;
 
-// outcome moet je bepalen vóór je de juiste defender survivors kiest
-const battleOutcome =
-  attackerPower > defenderPower
-    ? "ATTACKER"
-    : attackerPower < defenderPower
-    ? "DEFENDER"
-    : "DRAW";
+      const defenderSurvivorsTotal =
+        defenderSurvivors.foot + defenderSurvivors.cav + defenderSurvivors.arch;
 
-// survivors
-const attackerSurvivors = applyWinnerSurvivors(m, attackerDiv);
+      // ===== WRITES =====
+      tx.update(playerRef, { credits: credits - cost });
 
-// defender survivors: enkel jouw nieuwe regels gebruiken wanneer defender wint
-const defenderSurvivors =
-  battleOutcome === "DEFENDER"
-    ? applyWinnerSurvivors(defTroops, defenderDiv)
-    : applyWinnerSurvivors(defTroops, attackerDiv);
+      // moved troops leave FROM always
+      tx.set(fromRef, nextFrom, { merge: true });
 
-const attackerSurvivorsTotal =
-  attackerSurvivors.foot + attackerSurvivors.cav + attackerSurvivors.arch;
+      const logRef1 = doc(collection(db, "games", gameId, "battleLog"));
+      const logRef2 = doc(collection(db, "games", gameId, "battleLog"));
 
-const defenderSurvivorsTotal =
-  defenderSurvivors.foot + defenderSurvivors.cav + defenderSurvivors.arch;
+      // if FROM becomes empty => release tile (unless basecamp)
+      if (fromBecomesEmpty && !fromTileIsBasecamp && fromTileOwner === playerId) {
+        tx.update(fromTileRef, { ownerPlayerId: null });
 
+        tx.set(
+          logRef1,
+          {
+            createdAt: serverTimestamp(),
+            type: "RELEASE",
+            tileId: fromTileId,
+            oldOwnerId: playerId,
+            newOwnerId: null,
+          },
+          { merge: true }
+        );
 
-        // ===== WRITES =====
-        tx.update(playerRef, { credits: credits - cost });
+        // ✅ Mage sterft wanneer tile neutral wordt
+        if (mage?.tileId && String(mage.tileId) === String(fromTileId)) {
+          const myMageRef = doc(db, "games", gameId, "mages", playerId);
+          tx.delete(myMageRef);
+          tx.update(playerRef, { hasMage: false });
+        }
+      }
 
-        // moved troops leave FROM always
-        tx.set(fromRef, nextFrom, { merge: true });
+      if (isEmptyOrOwn) {
+        // move into own/empty
+        tx.set(
+          toRef,
+          {
+            foot: toTroops.foot + m.foot,
+            cav: toTroops.cav + m.cav,
+            arch: toTroops.arch + m.arch,
+          },
+          { merge: true }
+        );
 
-        // we may need up to 2 log entries (release + conquer/battle)
-        const logRef1 = doc(collection(db, "games", gameId, "battleLog"));
-        const logRef2 = doc(collection(db, "games", gameId, "battleLog"));
-
-        // if FROM becomes empty => release tile (unless basecamp)
-        if (fromBecomesEmpty && !fromTileIsBasecamp && fromTileOwner === playerId) {
-          tx.update(fromTileRef, { ownerPlayerId: null });
+        if (!toOwner) {
+          // conquest
+          tx.update(tileRef, { ownerPlayerId: playerId });
 
           tx.set(
-            logRef1,
+            logRef2,
             {
               createdAt: serverTimestamp(),
-              type: "RELEASE",
-              tileId: fromTileId,
-              oldOwnerId: playerId,
-              newOwnerId: null,
+              type: "CONQUER",
+              tileId: toTileId,
+              oldOwnerId: null,
+              newOwnerId: playerId,
             },
             { merge: true }
           );
         }
 
-        if (isEmptyOrOwn) {
-          // move into own/empty
+        return;
+      }
+
+      // enemy tile => battle
+      if (battleOutcome === "ATTACKER") {
+        didBattle = true;
+
+        // If attacker "wins" but 0 survivors => DRAW
+        if (attackerSurvivorsTotal <= 0) {
+          uiMessage = `🤝 You attacked tile #${toTileId}, but BOTH armies were defeated. (No survivors)`;
+
           tx.set(
-            toRef,
+            logRef2,
             {
-              foot: toTroops.foot + m.foot,
-              cav: toTroops.cav + m.cav,
-              arch: toTroops.arch + m.arch,
+              createdAt: serverTimestamp(),
+              type: "DRAW",
+              tileId: toTileId,
+              attackerId: playerId,
+              defenderId: toOwner,
+              winnerId: null,
+              attackerPower,
+              defenderPower,
+              diff,
+              margin,
+              divisor: attackerDiv,
+              note: "attacker_win_but_no_survivors",
             },
             { merge: true }
           );
 
-          if (!toOwner) {
-            // conquest
-            tx.update(tileRef, { ownerPlayerId: playerId });
+          tx.update(tileRef, { ownerPlayerId: null });
+          tx.set(toRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+          tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
 
-            tx.set(
-              logRef2,
-              {
-                createdAt: serverTimestamp(),
-                type: "CONQUER",
-                tileId: toTileId,
-                oldOwnerId: null,
-                newOwnerId: playerId,
-              },
-              { merge: true }
-            );
+          if (defenderMageOnThisTile && defMageRef) {
+            tx.delete(defMageRef);
+            const defPlayerRef = doc(db, "games", gameId, "players", toOwner);
+            tx.update(defPlayerRef, { hasMage: false });
           }
 
           return;
         }
 
-       // enemy tile => battle (always log)
-if (battleOutcome === "ATTACKER") {
-  didBattle = true;
+        uiMessage = `⚔️ You attacked tile #${toTileId} and WON.`;
 
-  // ✅ If attacker "wins" but ends with 0 survivors => DRAW (neutral tile)
-  if (attackerSurvivorsTotal <= 0) {
-    uiMessage = `🤝 You attacked tile #${toTileId}, but BOTH armies were defeated. (No survivors)`;
+        tx.set(
+          logRef2,
+          {
+            createdAt: serverTimestamp(),
+            type: "ATTACKER_WIN",
+            tileId: toTileId,
+            attackerId: playerId,
+            defenderId: toOwner,
+            winnerId: playerId,
+            attackerPower,
+            defenderPower,
+            diff,
+            margin,
+            divisor: attackerDiv,
+            survivors: attackerSurvivors,
+          },
+          { merge: true }
+        );
 
-    tx.set(
-      logRef2,
-      {
-        createdAt: serverTimestamp(),
-        type: "DRAW",
-        tileId: toTileId,
-        attackerId: playerId,
-        defenderId: toOwner,
-        winnerId: null,
-        attackerPower,
-        defenderPower,
-        diff,
-        margin,
-        divisor: attackerDiv,
-        note: "attacker_win_but_no_survivors",
-      },
-      { merge: true }
-    );
+        tx.update(tileRef, { ownerPlayerId: playerId });
 
-    tx.update(tileRef, { ownerPlayerId: null });
-    tx.set(toRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
-    tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+        tx.set(
+          toRef,
+          {
+            foot: toTroops.foot + attackerSurvivors.foot,
+            cav: toTroops.cav + attackerSurvivors.cav,
+            arch: toTroops.arch + attackerSurvivors.arch,
+          },
+          { merge: true }
+        );
 
-    if (defenderMageOnThisTile && defMageRef) {
-      tx.delete(defMageRef);
+        tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+
+        if (defenderMageOnThisTile && defMageRef) {
+          tx.delete(defMageRef);
+          const defPlayerRef = doc(db, "games", gameId, "players", toOwner);
+          tx.update(defPlayerRef, { hasMage: false });
+        }
+
+        return;
+      }
+
+      if (battleOutcome === "DEFENDER") {
+        didBattle = true;
+
+        // If defender "wins" but 0 survivors => DRAW
+        if (defenderSurvivorsTotal <= 0) {
+          uiMessage = `🤝 You attacked tile #${toTileId} — DRAW. Both armies destroyed. (No defender survivors)`;
+
+          tx.set(
+            logRef2,
+            {
+              createdAt: serverTimestamp(),
+              type: "DRAW",
+              tileId: toTileId,
+              attackerId: playerId,
+              defenderId: toOwner,
+              winnerId: null,
+              attackerPower,
+              defenderPower,
+              diff,
+              margin,
+              divisor: attackerDiv,
+              note: "defender_hold_but_no_survivors",
+            },
+            { merge: true }
+          );
+
+          tx.update(tileRef, { ownerPlayerId: null });
+          tx.set(toRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+          tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+
+          if (defenderMageOnThisTile && defMageRef) {
+            tx.delete(defMageRef);
+            const defPlayerRef = doc(db, "games", gameId, "players", toOwner);
+            tx.update(defPlayerRef, { hasMage: false });
+          }
+
+          return;
+        }
+
+        uiMessage = `⚔️ You attacked tile #${toTileId} but LOST.`;
+
+        tx.set(
+          logRef2,
+          {
+            createdAt: serverTimestamp(),
+            type: "DEFENDER_HOLD",
+            tileId: toTileId,
+            attackerId: playerId,
+            defenderId: toOwner,
+            winnerId: toOwner,
+            attackerPower,
+            defenderPower,
+            diff,
+            margin,
+            divisor: defenderDiv,
+            survivors: defenderSurvivors,
+          },
+          { merge: true }
+        );
+
+        tx.set(defRef, defenderSurvivors, { merge: true });
+
+        // ✅ IMPORTANT: ensure attacker has no troops on enemy tile
+        tx.set(toRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+
+        return;
+      }
+
+      // DRAW
+      didBattle = true;
+      uiMessage = `🤝 You attacked tile #${toTileId}, but BOTH armies were defeated.`;
+
+      tx.set(
+        logRef2,
+        {
+          createdAt: serverTimestamp(),
+          type: "DRAW",
+          tileId: toTileId,
+          attackerId: playerId,
+          defenderId: toOwner,
+          winnerId: null,
+          attackerPower,
+          defenderPower,
+          diff,
+          margin,
+          divisor: attackerDiv,
+        },
+        { merge: true }
+      );
+
+      tx.update(tileRef, { ownerPlayerId: null });
+
+      tx.set(toRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+      tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+
+      if (defenderMageOnThisTile && defMageRef) {
+        tx.delete(defMageRef);
+        const defPlayerRef = doc(db, "games", gameId, "players", toOwner);
+        tx.update(defPlayerRef, { hasMage: false });
+      }
+    });
+
+    // reset inputs
+    setMoveFoot(0);
+    setMoveCav(0);
+    setMoveArch(0);
+    setFromTileId("");
+    setToTileId("");
+    setMapPickMode("FROM");
+    setSelectedTileId("");
+
+    if (didBattle) {
+      playBattleAudio();
+      setStatus(uiMessage || "⚔️ Battle resolved.");
+    } else {
+      setStatus(`✅ Moved. Cost: ${cost} credits`);
     }
-
-    return;
-  }
-
-  uiMessage = `⚔️ You attacked tile #${toTileId} and WON.`;
-
-  tx.set(
-    logRef2,
-    {
-      createdAt: serverTimestamp(),
-      type: "ATTACKER_WIN",
-      tileId: toTileId,
-      attackerId: playerId,
-      defenderId: toOwner,
-      winnerId: playerId,
-      attackerPower,
-      defenderPower,
-      diff,
-      margin,
-      divisor: attackerDiv,
-      survivors: attackerSurvivors,
-    },
-    { merge: true }
-  );
-
-  tx.update(tileRef, { ownerPlayerId: playerId });
-
-  tx.set(
-    toRef,
-    {
-      foot: toTroops.foot + attackerSurvivors.foot,
-      cav: toTroops.cav + attackerSurvivors.cav,
-      arch: toTroops.arch + attackerSurvivors.arch,
-    },
-    { merge: true }
-  );
-
-  tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
-
-  if (defenderMageOnThisTile && defMageRef) {
-    tx.delete(defMageRef);
-  }
-
-} else if (battleOutcome === "DEFENDER") {
-  didBattle = true;
-
-  // ✅ If defender "wins" but ends with 0 survivors => DRAW (neutral tile)
-  if (defenderSurvivorsTotal <= 0) {
-    uiMessage = `🤝 You attacked tile #${toTileId} — DRAW. Both armies destroyed. (No defender survivors)`;
-
-    tx.set(
-      logRef2,
-      {
-        createdAt: serverTimestamp(),
-        type: "DRAW",
-        tileId: toTileId,
-        attackerId: playerId,
-        defenderId: toOwner,
-        winnerId: null,
-        attackerPower,
-        defenderPower,
-        diff,
-        margin,
-        divisor: attackerDiv,
-        note: "defender_hold_but_no_survivors",
-      },
-      { merge: true }
-    );
-
-    tx.update(tileRef, { ownerPlayerId: null });
-    tx.set(toRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
-    tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
-
-    if (defenderMageOnThisTile && defMageRef) {
-      tx.delete(defMageRef);
-    }
-
-    return;
-  }
-
-  uiMessage = `⚔️ You attacked tile #${toTileId} but LOST.`;
-
-  tx.set(
-    logRef2,
-    {
-      createdAt: serverTimestamp(),
-      type: "DEFENDER_HOLD",
-      tileId: toTileId,
-      attackerId: playerId,
-      defenderId: toOwner,
-      winnerId: toOwner,
-      attackerPower,
-      defenderPower,
-      diff,
-      margin,
-      divisor: defenderDiv,
-      survivors: defenderSurvivors,
-    },
-    { merge: true }
-  );
-
-  tx.set(defRef, defenderSurvivors, { merge: true });
-
-} else {
-  didBattle = true;
-  uiMessage = `🤝 You attacked tile #${toTileId}, but BOTH armies were defeated.`;
-
-  tx.set(
-    logRef2,
-    {
-      createdAt: serverTimestamp(),
-      type: "DRAW",
-      tileId: toTileId,
-      attackerId: playerId,
-      defenderId: toOwner,
-      winnerId: null,
-      attackerPower,
-      defenderPower,
-      diff,
-      margin,
-      divisor: attackerDiv,
-    },
-    { merge: true }
-  );
-
-  tx.update(tileRef, { ownerPlayerId: null });
-
-  tx.set(toRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
-  tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
-
-  if (defenderMageOnThisTile && defMageRef) {
-    tx.delete(defMageRef);
+  } catch (err: any) {
+    console.error(err);
+    setStatus(`❌ ${err?.message ?? String(err)}`);
   }
 }
- 
-      });
 
-      // reset inputs
-      setMoveFoot(0);
-      setMoveCav(0);
-      setMoveArch(0);
-      setFromTileId("");
-      setToTileId("");
-      setMapPickMode("FROM");
-      setSelectedTileId("");
-
-
-      if (didBattle) {
-        playBattleAudio();
-        setStatus(uiMessage || "⚔️ Battle resolved.");
-      } else {
-        setStatus(`✅ Moved. Cost: ${cost} credits`);
-      }
-    } catch (err: any) {
-      console.error(err);
-      setStatus(`❌ ${err?.message ?? String(err)}`);
-    }
-  }
+  
 
       async function drinkBeerculesPint() {
     setStatus("");
@@ -1505,570 +1509,500 @@ if (battleOutcome === "ATTACKER") {
   }
 }
 
+async function teleportMoveWithMage() {
+  setStatus("");
 
-          async function teleportMoveWithMage() {
-    setStatus("");
+  if (!mage?.tileId) {
+    setStatus("❌ You need a Mage to teleport.");
+    return;
+  }
 
-    if (!mage?.tileId) {
-      setStatus("❌ You need a Mage to teleport.");
-      return;
-    }
+  // Mage must be on a tile you control (client-side quick check)
+  const mageTile = tiles.find((t) => String(t.id) === String(mage.tileId)) ?? null;
+  if (!mageTile || mageTile.ownerPlayerId !== playerId) {
+    setStatus("❌ Mage must be on a tile you control.");
+    return;
+  }
 
-    // Mage must be on a tile you control
-    const mageTile = tiles.find((t) => t.id === mage.tileId) ?? null;
-    if (!mageTile || mageTile.ownerPlayerId !== playerId) {
-      setStatus("❌ Mage must be on a tile you control.");
-      return;
-    }
+  if (!tpFromTileId || !tpToTileId) {
+    setStatus("❌ Kies een FROM en TO tile voor teleport.");
+    return;
+  }
+  if (tpFromTileId === tpToTileId) {
+    setStatus("❌ TO mag niet dezelfde zijn als FROM.");
+    return;
+  }
 
-    if (!tpFromTileId || !tpToTileId) {
-      setStatus("❌ Kies een FROM en TO tile voor teleport.");
-      return;
-    }
-    if (tpFromTileId === tpToTileId) {
-      setStatus("❌ TO mag niet dezelfde zijn als FROM.");
-      return;
-    }
+  const fromTile = tiles.find((t) => String(t.id) === String(tpFromTileId)) ?? null;
+  const toTile = tiles.find((t) => String(t.id) === String(tpToTileId)) ?? null;
 
-    const fromTile = tiles.find((t) => t.id === tpFromTileId) ?? null;
-    const toTile = tiles.find((t) => t.id === tpToTileId) ?? null;
+  if (!fromTile || !toTile) {
+    setStatus("❌ Tile not found.");
+    return;
+  }
 
-    if (!fromTile || !toTile) {
-      setStatus("❌ Tile not found.");
-      return;
-    }
+  // FROM must be your controlled (or your basecamp allowed as FROM)
+  const fromIsOwn =
+    fromTile.ownerPlayerId === playerId ||
+    (fromTile.isBasecamp && fromTile.basecampOwnerPlayerId === playerId);
 
-    // FROM must be your controlled (or your basecamp allowed as FROM)
-    const fromIsOwn =
-      fromTile.ownerPlayerId === playerId ||
-      (fromTile.isBasecamp && fromTile.basecampOwnerPlayerId === playerId);
+  if (!fromIsOwn) {
+    setStatus("❌ Teleport FROM must be a tile you control (or your basecamp).");
+    return;
+  }
 
-    if (!fromIsOwn) {
-      setStatus("❌ Teleport FROM must be a tile you control (or your basecamp).");
-      return;
-    }
+  // TO can be any tile EXCEPT basecamps
+  if (toTile.isBasecamp) {
+    setStatus("❌ Teleport TO cannot be a basecamp (anyone's).");
+    return;
+  }
 
-    // TO can be any tile EXCEPT basecamps
-    if (toTile.isBasecamp) {
-      setStatus("❌ Teleport TO cannot be a basecamp (anyone's).");
-      return;
-    }
+  const m = {
+    foot: Math.max(0, Math.floor(Number(tpFoot) || 0)),
+    cav: Math.max(0, Math.floor(Number(tpCav) || 0)),
+    arch: Math.max(0, Math.floor(Number(tpArch) || 0)),
+  };
 
-    const m = {
-      foot: Math.max(0, Math.floor(Number(tpFoot) || 0)),
-      cav: Math.max(0, Math.floor(Number(tpCav) || 0)),
-      arch: Math.max(0, Math.floor(Number(tpArch) || 0)),
-    };
+  const total = m.foot + m.cav + m.arch;
+  if (total <= 0) {
+    setStatus("❌ Kies minstens 1 troep om te teleporteren.");
+    return;
+  }
 
-    const total = m.foot + m.cav + m.arch;
-    if (total <= 0) {
-      setStatus("❌ Kies minstens 1 troep om te teleporteren.");
-      return;
-    }
+  const cost = total * 1000;
+  setStatus("Teleporting...");
 
-    const cost = total * 1000;
-    setStatus("Teleporting...");
+  const playerRef = doc(db, "games", gameId, "players", playerId);
+  const myMageRef = doc(db, "games", gameId, "mages", playerId);
 
-    const playerRef = doc(db, "games", gameId, "players", playerId);
-    const fromRef = doc(db, "games", gameId, "deployments", playerId, "tiles", tpFromTileId);
-    const toRef = doc(db, "games", gameId, "deployments", playerId, "tiles", tpToTileId);
+  const fromRef = doc(db, "games", gameId, "deployments", playerId, "tiles", tpFromTileId);
+  const toRef = doc(db, "games", gameId, "deployments", playerId, "tiles", tpToTileId);
 
-    const fromTileRef = doc(db, "games", gameId, "tiles", tpFromTileId);
-    const toTileRef = doc(db, "games", gameId, "tiles", tpToTileId);
+  const fromTileRef = doc(db, "games", gameId, "tiles", tpFromTileId);
+  const toTileRef = doc(db, "games", gameId, "tiles", tpToTileId);
 
-    let didBattle = false;
-    let uiMessage = "";
+  let didBattle = false;
+  let uiMessage = "";
 
-    try {
-      await runTransaction(db, async (tx) => {
-        // ===== READS FIRST =====
-        const pSnap = await tx.get(playerRef);
-        if (!pSnap.exists()) throw new Error("Player not found");
-        const credits = Number((pSnap.data() as any)?.credits ?? 0);
-        if (credits < cost) throw new Error("Not enough credits");
+  try {
+    await runTransaction(db, async (tx) => {
+      // ===== READS FIRST =====
+      const pSnap = await tx.get(playerRef);
+      if (!pSnap.exists()) throw new Error("Player not found");
+      const pData = pSnap.data() as any;
 
-        // re-check mage tile ownership in transaction
-        const mageTileRef = doc(db, "games", gameId, "tiles", mage.tileId);
-        const mageTileSnap = await tx.get(mageTileRef);
-        if (!mageTileSnap.exists()) throw new Error("Mage tile not found");
-        const mageTileData = mageTileSnap.data() as any;
-        if ((mageTileData.ownerPlayerId ?? null) !== playerId) {
-          throw new Error("Mage must be on a tile you control");
-        }
+      const credits = Number(pData?.credits ?? 0);
+      if (credits < cost) throw new Error("Not enough credits");
 
-        const fromTileSnap = await tx.get(fromTileRef);
-        if (!fromTileSnap.exists()) throw new Error("FROM tile not found");
-        const fromTileData = fromTileSnap.data() as any;
+      // Re-check mage tile ownership in transaction
+      const mageTileRefTx = doc(db, "games", gameId, "tiles", String(mage.tileId));
+      const mageTileSnap = await tx.get(mageTileRefTx);
+      if (!mageTileSnap.exists()) throw new Error("Mage tile not found");
+      const mageTileData = mageTileSnap.data() as any;
+      if ((mageTileData.ownerPlayerId ?? null) !== playerId) {
+        throw new Error("Mage must be on a tile you control");
+      }
 
-        const fromIsOwnTx =
-          (fromTileData.ownerPlayerId ?? null) === playerId ||
-          (!!fromTileData.isBasecamp &&
-            (fromTileData.basecampOwnerPlayerId ?? null) === playerId);
+      const fromTileSnap = await tx.get(fromTileRef);
+      if (!fromTileSnap.exists()) throw new Error("FROM tile not found");
+      const fromTileData = fromTileSnap.data() as any;
 
-        if (!fromIsOwnTx) throw new Error("Teleport FROM must be your tile (or your basecamp)");
+      const fromIsOwnTx =
+        (fromTileData.ownerPlayerId ?? null) === playerId ||
+        (!!fromTileData.isBasecamp && (fromTileData.basecampOwnerPlayerId ?? null) === playerId);
 
-        const toTileSnap = await tx.get(toTileRef);
-        if (!toTileSnap.exists()) throw new Error("TO tile not found");
-        const toTileData = toTileSnap.data() as any;
+      if (!fromIsOwnTx) throw new Error("Teleport FROM must be your tile (or your basecamp)");
 
-        if (!!toTileData.isBasecamp) throw new Error("Teleport TO cannot be a basecamp");
+      const toTileSnap = await tx.get(toTileRef);
+      if (!toTileSnap.exists()) throw new Error("TO tile not found");
+      const toTileData = toTileSnap.data() as any;
 
-        const toOwner: string | null = toTileData.ownerPlayerId ?? null;
-        // ===== defender mage check (READ) =====
-        const defMageRef =
-        toOwner && toOwner !== playerId
-        ? doc(db, "games", gameId, "mages", toOwner)
-        : null;
+      if (!!toTileData.isBasecamp) throw new Error("Teleport TO cannot be a basecamp");
 
-        let defenderMageOnThisTile = false;
+      const toOwner: string | null = toTileData.ownerPlayerId ?? null;
+      const isEmptyOrOwn = !toOwner || toOwner === playerId;
 
-        if (defMageRef) {
-          const defMageSnap = await tx.get(defMageRef);
+      // Defender mage check (READ)
+      const defMageRef =
+        toOwner && toOwner !== playerId ? doc(db, "games", gameId, "mages", toOwner) : null;
+
+      let defenderMageOnThisTile = false;
+      if (defMageRef) {
+        const defMageSnap = await tx.get(defMageRef);
         if (defMageSnap.exists()) {
-        const defMage = defMageSnap.data() as any;
-         defenderMageOnThisTile = String(defMage.tileId ?? "") === tpToTileId;
-         }
+          const defMage = defMageSnap.data() as any;
+          defenderMageOnThisTile = String(defMage.tileId ?? "") === String(tpToTileId);
         }
+      }
 
+      // FROM troops (your deployment)
+      const fSnap = await tx.get(fromRef);
+      const f = (fSnap.exists() ? (fSnap.data() as any) : {}) as any;
+      const fTroops = {
+        foot: Number(f.foot ?? 0),
+        cav: Number(f.cav ?? 0),
+        arch: Number(f.arch ?? 0),
+      };
 
-        const fSnap = await tx.get(fromRef);
-        const f = (fSnap.exists() ? (fSnap.data() as any) : {}) as any;
-        const fTroops = {
-          foot: Number(f.foot ?? 0),
-          cav: Number(f.cav ?? 0),
-          arch: Number(f.arch ?? 0),
+      if (m.foot > fTroops.foot || m.cav > fTroops.cav || m.arch > fTroops.arch) {
+        throw new Error("Not enough troops on FROM tile");
+      }
+
+      const nextFrom = {
+        foot: fTroops.foot - m.foot,
+        cav: fTroops.cav - m.cav,
+        arch: fTroops.arch - m.arch,
+      };
+      const fromBecomesEmpty = nextFrom.foot + nextFrom.cav + nextFrom.arch <= 0;
+
+      // TO troops (your own deployment doc on TO)
+      const toSnap = await tx.get(toRef);
+      const toData = (toSnap.exists() ? (toSnap.data() as any) : {}) as any;
+      const toTroops = {
+        foot: Number(toData.foot ?? 0),
+        cav: Number(toData.cav ?? 0),
+        arch: Number(toData.arch ?? 0),
+      };
+
+      // Defender troops if enemy
+      let defRef: any = null;
+      let defTroops: Troops = { foot: 0, cav: 0, arch: 0 };
+
+      if (!isEmptyOrOwn) {
+        defRef = doc(db, "games", gameId, "deployments", toOwner!, "tiles", tpToTileId);
+        const dSnap = await tx.get(defRef);
+        const d = (dSnap.exists() ? (dSnap.data() as any) : {}) as any;
+        defTroops = {
+          foot: Number(d.foot ?? 0),
+          cav: Number(d.cav ?? 0),
+          arch: Number(d.arch ?? 0),
         };
+      }
 
-        if (m.foot > fTroops.foot || m.cav > fTroops.cav || m.arch > fTroops.arch) {
-          throw new Error("Not enough troops on FROM tile");
-        }
+      // ===== DECISION (battle math) =====
+      const attExp = {
+        foot: Math.max(0, Math.floor(Number(pData?.exp?.foot ?? 0))),
+        cav: Math.max(0, Math.floor(Number(pData?.exp?.cav ?? 0))),
+        arch: Math.max(0, Math.floor(Number(pData?.exp?.arch ?? 0))),
+      };
 
-        const nextFrom = {
-          foot: fTroops.foot - m.foot,
-          cav: fTroops.cav - m.cav,
-          arch: fTroops.arch - m.arch,
-        };
-        const fromBecomesEmpty = nextFrom.foot + nextFrom.cav + nextFrom.arch <= 0;
-
-        const toSnap = await tx.get(toRef);
-        const toData = (toSnap.exists() ? (toSnap.data() as any) : {}) as any;
-        const toTroops = {
-          foot: Number(toData.foot ?? 0),
-          cav: Number(toData.cav ?? 0),
-          arch: Number(toData.arch ?? 0),
-        };
-
-        // defender troops if enemy
-        let defRef: any = null;
-        let defTroops: Troops = { foot: 0, cav: 0, arch: 0 };
-
-        const isEmptyOrOwn = !toOwner || toOwner === playerId;
-
-        if (!isEmptyOrOwn) {
-          defRef = doc(db, "games", gameId, "deployments", toOwner, "tiles", tpToTileId);
-          const dSnap = await tx.get(defRef);
-          const d = (dSnap.exists() ? (dSnap.data() as any) : {}) as any;
-          defTroops = {
-            foot: Number(d.foot ?? 0),
-            cav: Number(d.cav ?? 0),
-            arch: Number(d.arch ?? 0),
+      let defExp = { foot: 0, cav: 0, arch: 0 };
+      if (!isEmptyOrOwn && toOwner) {
+        const defPlayerRef = doc(db, "games", gameId, "players", toOwner);
+        const defPlayerSnap = await tx.get(defPlayerRef);
+        if (defPlayerSnap.exists()) {
+          const dp = defPlayerSnap.data() as any;
+          defExp = {
+            foot: Math.max(0, Math.floor(Number(dp?.exp?.foot ?? 0))),
+            cav: Math.max(0, Math.floor(Number(dp?.exp?.cav ?? 0))),
+            arch: Math.max(0, Math.floor(Number(dp?.exp?.arch ?? 0))),
           };
         }
+      }
 
-        // ===== DECISION =====
-        // attacker exp = from own player doc (pSnap)
-const attExp = {
-  foot: Math.max(0, Math.floor(Number((pSnap.data() as any)?.exp?.foot ?? 0))),
-  cav: Math.max(0, Math.floor(Number((pSnap.data() as any)?.exp?.cav ?? 0))),
-  arch: Math.max(0, Math.floor(Number((pSnap.data() as any)?.exp?.arch ?? 0))),
-};
+      const attackerPower =
+        (m.foot * attExp.foot) / 3 + (m.cav * attExp.cav) / 3 + (m.arch * attExp.arch) / 3;
 
-// defender exp: default 0 als neutral/unknown
-let defExp = { foot: 0, cav: 0, arch: 0 };
+      const defenderPower =
+        (defTroops.foot * defExp.foot) / 3 +
+        (defTroops.cav * defExp.cav) / 3 +
+        (defTroops.arch * defExp.arch) / 3;
 
-if (!isEmptyOrOwn && toOwner) {
-  const defPlayerRef = doc(db, "games", gameId, "players", toOwner);
-  const defPlayerSnap = await tx.get(defPlayerRef);
-  if (defPlayerSnap.exists()) {
-    const dp = defPlayerSnap.data() as any;
-    defExp = {
-      foot: Math.max(0, Math.floor(Number(dp?.exp?.foot ?? 0))),
-      cav: Math.max(0, Math.floor(Number(dp?.exp?.cav ?? 0))),
-      arch: Math.max(0, Math.floor(Number(dp?.exp?.arch ?? 0))),
-    };
-  }
-}
+      const diff = attackerPower - defenderPower;
+      const margin = Math.abs(diff);
 
-const attackerPower =
-  (m.foot * attExp.foot) / 3 +
-  (m.cav * attExp.cav) / 3 +
-  (m.arch * attExp.arch) / 3;
+      const battleOutcome =
+        attackerPower > defenderPower ? "ATTACKER" : attackerPower < defenderPower ? "DEFENDER" : "DRAW";
 
-const defenderPower =
-  (defTroops.foot * defExp.foot) / 3 +
-  (defTroops.cav * defExp.cav) / 3 +
-  (defTroops.arch * defExp.arch) / 3;
+      const attackerDivisor = winnerDivisor(margin);
+      const defenderDivisor = defenderWinDivisor(margin);
 
-        const diff = attackerPower - defenderPower;
-        const margin = Math.abs(diff);
-        // outcome eerst bepalen (handig om juiste divisor te kiezen)
-        const battleOutcome =
-          attackerPower > defenderPower
-            ? "ATTACKER"
-            : attackerPower < defenderPower
-            ? "DEFENDER"
-            : "DRAW";
+      const attackerSurvivors = applyWinnerSurvivors(m, attackerDivisor);
+      const defenderSurvivors =
+        battleOutcome === "DEFENDER"
+          ? applyWinnerSurvivors(defTroops, defenderDivisor)
+          : applyWinnerSurvivors(defTroops, attackerDivisor);
 
-        // divisors
-        const attackerDiv = winnerDivisor(margin);
-        const defenderDiv = defenderWinDivisor(margin);
+      const attackerSurvivorsTotal = attackerSurvivors.foot + attackerSurvivors.cav + attackerSurvivors.arch;
+      const defenderSurvivorsTotal = defenderSurvivors.foot + defenderSurvivors.cav + defenderSurvivors.arch;
 
-        // survivors
-        const attackerSurvivors = applyWinnerSurvivors(m, attackerDiv);
+      // ===== WRITES =====
+      tx.update(playerRef, { credits: credits - cost });
 
-        const defenderSurvivors =
-          battleOutcome === "DEFENDER"
-            ? applyWinnerSurvivors(defTroops, defenderDiv) // ✅ nieuwe defender regels
-            : applyWinnerSurvivors(defTroops, attackerDiv);
+      // troops always leave FROM
+      tx.set(fromRef, nextFrom, { merge: true });
 
-        const attackerSurvivorsTotal =
-          attackerSurvivors.foot + attackerSurvivors.cav + attackerSurvivors.arch;
+      const logRef1 = doc(collection(db, "games", gameId, "battleLog"));
+      const logRef2 = doc(collection(db, "games", gameId, "battleLog"));
 
-        const defenderSurvivorsTotal =
-          defenderSurvivors.foot + defenderSurvivors.cav + defenderSurvivors.arch;
+      // release if FROM becomes empty and isn't basecamp
+      if (fromBecomesEmpty && !fromTileData.isBasecamp && (fromTileData.ownerPlayerId ?? null) === playerId) {
+        tx.update(fromTileRef, { ownerPlayerId: null });
 
+        // Mage dies if it was on the released tile
+        if (String(mage.tileId) === String(tpFromTileId)) {
+          tx.delete(myMageRef);
+          tx.update(playerRef, { hasMage: false });
+        }
 
+        tx.set(
+          logRef1,
+          {
+            createdAt: serverTimestamp(),
+            type: "RELEASE",
+            tileId: tpFromTileId,
+            oldOwnerId: playerId,
+            newOwnerId: null,
+          },
+          { merge: true }
+        );
+      }
 
-        // ===== WRITES =====
-        tx.update(playerRef, { credits: credits - cost });
+      // === No battle: teleport into own/neutral ===
+      if (isEmptyOrOwn) {
+        tx.set(
+          toRef,
+          {
+            foot: toTroops.foot + m.foot,
+            cav: toTroops.cav + m.cav,
+            arch: toTroops.arch + m.arch,
+          },
+          { merge: true }
+        );
 
-        // troops always leave FROM
-        tx.set(fromRef, nextFrom, { merge: true });
-
-        const logRef1 = doc(collection(db, "games", gameId, "battleLog"));
-        const logRef2 = doc(collection(db, "games", gameId, "battleLog"));
-
-        // release if FROM becomes empty and isn't basecamp
-        if (
-          fromBecomesEmpty &&
-          !fromTileData.isBasecamp &&
-          (fromTileData.ownerPlayerId ?? null) === playerId
-        ) {
-          tx.update(fromTileRef, { ownerPlayerId: null });
-
+        if (!toOwner) {
+          tx.update(toTileRef, { ownerPlayerId: playerId });
           tx.set(
-            logRef1,
+            logRef2,
             {
               createdAt: serverTimestamp(),
-              type: "RELEASE",
-              tileId: tpFromTileId,
-              oldOwnerId: playerId,
-              newOwnerId: null,
+              type: "CONQUER",
+              tileId: tpToTileId,
+              oldOwnerId: null,
+              newOwnerId: playerId,
             },
             { merge: true }
           );
         }
 
-        if (isEmptyOrOwn) {
-          // teleport into own/neutral
+        return;
+      }
+
+      // === Enemy tile => battle ===
+      didBattle = true;
+
+      if (battleOutcome === "ATTACKER") {
+        // attacker "wins" but no survivors => DRAW
+        if (attackerSurvivorsTotal <= 0) {
+          uiMessage = `🧙🤝 Teleport attack on tile #${tpToTileId}: DRAW. Both armies destroyed. (No survivors)`;
+
           tx.set(
-            toRef,
+            logRef2,
             {
-              foot: toTroops.foot + m.foot,
-              cav: toTroops.cav + m.cav,
-              arch: toTroops.arch + m.arch,
+              createdAt: serverTimestamp(),
+              type: "DRAW",
+              tileId: tpToTileId,
+              attackerId: playerId,
+              defenderId: toOwner,
+              winnerId: null,
+              attackerPower,
+              defenderPower,
+              diff,
+              margin,
+              attackerDivisor,
+              defenderDivisor,
+              note: "teleport_attacker_win_but_no_survivors",
             },
             { merge: true }
           );
 
-          if (!toOwner) {
-            // conquest
-            tx.update(toTileRef, { ownerPlayerId: playerId });
+          tx.update(toTileRef, { ownerPlayerId: null });
 
-            tx.set(
-              logRef2,
-              {
-                createdAt: serverTimestamp(),
-                type: "CONQUER",
-                tileId: tpToTileId,
-                oldOwnerId: null,
-                newOwnerId: playerId,
-              },
-              { merge: true }
-            );
+          // clear both deployments explicitly
+          tx.set(toRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+          tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+
+          if (defenderMageOnThisTile && defMageRef) {
+            tx.delete(defMageRef);
+            const defPlayerRef = doc(db, "games", gameId, "players", toOwner);
+            tx.update(defPlayerRef, { hasMage: false });
           }
 
           return;
         }
 
-        // enemy tile => battle
-if (battleOutcome === "ATTACKER") {
-  didBattle = true;
+        // normal attacker win
+        uiMessage = `🧙⚔️ Teleport attack on tile #${tpToTileId}: WON.`;
 
-  // If attacker "wins" but 0 survivors => DRAW
-  if (attackerSurvivorsTotal <= 0) {
-    uiMessage = `🧙🤝 Teleport attack on tile #${tpToTileId}: DRAW. Both armies destroyed. (No survivors)`;
+        tx.set(
+          logRef2,
+          {
+            createdAt: serverTimestamp(),
+            type: "ATTACKER_WIN",
+            tileId: tpToTileId,
+            attackerId: playerId,
+            defenderId: toOwner,
+            winnerId: playerId,
+            attackerPower,
+            defenderPower,
+            diff,
+            margin,
+            attackerDivisor,
+            defenderDivisor,
+            survivors: attackerSurvivors,
+          },
+          { merge: true }
+        );
 
-    tx.set(
-      logRef2,
-      {
-        createdAt: serverTimestamp(),
-        type: "DRAW",
-        tileId: tpToTileId,
-        attackerId: playerId,
-        defenderId: toOwner,
-        winnerId: null,
-        attackerPower,
-        defenderPower,
-        diff,
-        margin,
-        divisor: attackerDiv,
-        note: "teleport_attacker_win_but_no_survivors",
-      },
-      { merge: true }
-    );
+        tx.update(toTileRef, { ownerPlayerId: playerId });
 
-    tx.update(toTileRef, { ownerPlayerId: null });
-    tx.set(toRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
-    tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+        tx.set(
+          toRef,
+          {
+            foot: toTroops.foot + attackerSurvivors.foot,
+            cav: toTroops.cav + attackerSurvivors.cav,
+            arch: toTroops.arch + attackerSurvivors.arch,
+          },
+          { merge: true }
+        );
 
-    if (defenderMageOnThisTile && defMageRef) {
-      tx.delete(defMageRef);
+        tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+
+        if (defenderMageOnThisTile && defMageRef) {
+          tx.delete(defMageRef);
+          const defPlayerRef = doc(db, "games", gameId, "players", toOwner);
+          tx.update(defPlayerRef, { hasMage: false });
+        }
+
+        return;
+      }
+
+      if (battleOutcome === "DEFENDER") {
+        // defender wins but no survivors => DRAW
+        if (defenderSurvivorsTotal <= 0) {
+          uiMessage = `🧙🤝 Teleport attack on tile #${tpToTileId}: DRAW. Both armies destroyed. (No defender survivors)`;
+
+          tx.set(
+            logRef2,
+            {
+              createdAt: serverTimestamp(),
+              type: "DRAW",
+              tileId: tpToTileId,
+              attackerId: playerId,
+              defenderId: toOwner,
+              winnerId: null,
+              attackerPower,
+              defenderPower,
+              diff,
+              margin,
+              attackerDivisor,
+              defenderDivisor,
+              note: "teleport_defender_hold_but_no_survivors",
+            },
+            { merge: true }
+          );
+
+          tx.update(toTileRef, { ownerPlayerId: null });
+
+          // clear both deployments explicitly
+          tx.set(toRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+          tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+
+          if (defenderMageOnThisTile && defMageRef) {
+            tx.delete(defMageRef);
+            const defPlayerRef = doc(db, "games", gameId, "players", toOwner);
+            tx.update(defPlayerRef, { hasMage: false });
+          }
+
+          return;
+        }
+
+        // normal defender hold
+        uiMessage = `🧙⚔️ Teleport attack on tile #${tpToTileId}: LOST.`;
+
+        tx.set(
+          logRef2,
+          {
+            createdAt: serverTimestamp(),
+            type: "DEFENDER_HOLD",
+            tileId: tpToTileId,
+            attackerId: playerId,
+            defenderId: toOwner,
+            winnerId: toOwner,
+            attackerPower,
+            defenderPower,
+            diff,
+            margin,
+            attackerDivisor,
+            defenderDivisor,
+            survivors: defenderSurvivors,
+          },
+          { merge: true }
+        );
+
+        // defender survivors remain
+        tx.set(defRef, defenderSurvivors, { merge: true });
+
+        // IMPORTANT: attacker should have no troops on enemy tile
+        tx.set(toRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+
+        return;
+      }
+
+      // DRAW
+      uiMessage = `🧙🤝 Teleport attack on tile #${tpToTileId}: DRAW. Both armies destroyed.`;
+
+      tx.set(
+        logRef2,
+        {
+          createdAt: serverTimestamp(),
+          type: "DRAW",
+          tileId: tpToTileId,
+          attackerId: playerId,
+          defenderId: toOwner,
+          winnerId: null,
+          attackerPower,
+          defenderPower,
+          diff,
+          margin,
+          attackerDivisor,
+          defenderDivisor,
+        },
+        { merge: true }
+      );
+
+      tx.update(toTileRef, { ownerPlayerId: null });
+
+      tx.set(toRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+      tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
+
+      if (defenderMageOnThisTile && defMageRef) {
+        tx.delete(defMageRef);
+        const defPlayerRef = doc(db, "games", gameId, "players", toOwner);
+        tx.update(defPlayerRef, { hasMage: false });
+      }
+    });
+
+    // ===== after transaction =====
+    setTpFoot(0);
+    setTpCav(0);
+    setTpArch(0);
+
+    if (didBattle) {
+      playBattleAudio();
+      setStatus(uiMessage || "🧙⚔️ Teleport battle resolved.");
+    } else {
+      setStatus(`🧙 Teleport moved. Cost: ${cost} credits`);
     }
-
-    return;
-  }
-
-  // Normal attacker win
-  uiMessage = `🧙⚔️ Teleport attack on tile #${tpToTileId}: WON.`;
-
-  tx.set(
-    logRef2,
-    {
-      createdAt: serverTimestamp(),
-      type: "ATTACKER_WIN",
-      tileId: tpToTileId,
-      attackerId: playerId,
-      defenderId: toOwner,
-      winnerId: playerId,
-      attackerPower,
-      defenderPower,
-      diff,
-      margin,
-      divisor: attackerDiv,
-      survivors: attackerSurvivors,
-    },
-    { merge: true }
-  );
-
-  tx.update(toTileRef, { ownerPlayerId: playerId });
-
-  tx.set(
-    toRef,
-    {
-      foot: toTroops.foot + attackerSurvivors.foot,
-      cav: toTroops.cav + attackerSurvivors.cav,
-      arch: toTroops.arch + attackerSurvivors.arch,
-    },
-    { merge: true }
-  );
-
-  tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
-
-  if (defenderMageOnThisTile && defMageRef) {
-    tx.delete(defMageRef);
-  }
-
-} else if (battleOutcome === "DEFENDER") {
-  didBattle = true;
-
-  // If defender "wins" but 0 survivors => DRAW
-  if (defenderSurvivorsTotal <= 0) {
-    uiMessage = `🧙🤝 Teleport attack on tile #${tpToTileId}: DRAW. Both armies destroyed. (No defender survivors)`;
-
-    tx.set(
-      logRef2,
-      {
-        createdAt: serverTimestamp(),
-        type: "DRAW",
-        tileId: tpToTileId,
-        attackerId: playerId,
-        defenderId: toOwner,
-        winnerId: null,
-        attackerPower,
-        defenderPower,
-        diff,
-        margin,
-        divisor: attackerDiv,
-        note: "teleport_defender_hold_but_no_survivors",
-      },
-      { merge: true }
-    );
-
-    tx.update(toTileRef, { ownerPlayerId: null });
-    tx.set(toRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
-    tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
-
-    if (defenderMageOnThisTile && defMageRef) {
-      tx.delete(defMageRef);
-    }
-
-    return;
-  }
-
-  // Normal defender hold (mage stays)
-  uiMessage = `🧙⚔️ Teleport attack on tile #${tpToTileId}: LOST.`;
-
-  tx.set(
-    logRef2,
-    {
-      createdAt: serverTimestamp(),
-      type: "DEFENDER_HOLD",
-      tileId: tpToTileId,
-      attackerId: playerId,
-      defenderId: toOwner,
-      winnerId: toOwner,
-      attackerPower,
-      defenderPower,
-      diff,
-      margin,
-      divisor: defenderDiv,
-      survivors: defenderSurvivors,
-    },
-    { merge: true }
-  );
-
-  tx.set(defRef, defenderSurvivors, { merge: true });
-
-} else {
-  didBattle = true;
-  uiMessage = `🧙🤝 Teleport attack on tile #${tpToTileId}: DRAW. Both armies destroyed.`;
-
-  tx.set(
-    logRef2,
-    {
-      createdAt: serverTimestamp(),
-      type: "DRAW",
-      tileId: tpToTileId,
-      attackerId: playerId,
-      defenderId: toOwner,
-      winnerId: null,
-      attackerPower,
-      defenderPower,
-      diff,
-      margin,
-      divisor: attackerDiv,
-    },
-    { merge: true }
-  );
-
-  tx.update(toTileRef, { ownerPlayerId: null });
-
-  tx.set(toRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
-  tx.set(defRef, { foot: 0, cav: 0, arch: 0 }, { merge: true });
-
-  if (defenderMageOnThisTile && defMageRef) {
-    tx.delete(defMageRef);
+  } catch (err: any) {
+    console.error(err);
+    setStatus(`❌ ${err?.message ?? String(err)}`);
   }
 }
 
-      });
+          
 
-      // ===== after transaction =====
-      setTpFoot(0);
-      setTpCav(0);
-      setTpArch(0);
-
-      if (didBattle) {
-        playBattleAudio();
-        setStatus(uiMessage || "🧙⚔️ Teleport battle resolved.");
-      } else {
-        setStatus(`🧙 Teleport moved. Cost: ${cost} credits`);
-      }
-    } catch (err: any) {
-      console.error(err);
-      setStatus(`❌ ${err?.message ?? String(err)}`);
-    }
-  }
-
-  async function moveMageAdjacent() {
-    setStatus("");
-
-    if (!mage?.tileId) {
-      setStatus("❌ You don’t own a Mage.");
-      return;
-    }
-    if (!mageMoveToTileId) {
-      setStatus("❌ Kies een adjacent tile om de Mage naartoe te verplaatsen.");
-      return;
-    }
-    if (mageMoveToTileId === mage.tileId) {
-      setStatus("❌ Destination is same as current Mage tile.");
-      return;
-    }
-
-    const allowed = neighbors(Number(mage.tileId)).includes(mageMoveToTileId);
-    if (!allowed) {
-      setStatus("❌ Mage move must be adjacent.");
-      return;
-    }
-
-    const dest = tiles.find((t) => t.id === mageMoveToTileId) ?? null;
-    if (!dest) {
-      setStatus("❌ Tile not found.");
-      return;
-    }
-    if (dest.isBasecamp) {
-      setStatus("❌ Mage cannot be on a basecamp.");
-      return;
-    }
-    if (dest.ownerPlayerId !== playerId) {
-      setStatus("❌ Mage can only move to a tile you control.");
-      return;
-    }
-
-    const cost = 1000;
-    setStatus("Moving Mage...");
-
-    const playerRef = doc(db, "games", gameId, "players", playerId);
-    const mageRef = doc(db, "games", gameId, "mages", playerId);
-    const destTileRef = doc(db, "games", gameId, "tiles", mageMoveToTileId);
-
-    try {
-      await runTransaction(db, async (tx) => {
-        const pSnap = await tx.get(playerRef);
-        if (!pSnap.exists()) throw new Error("Player not found");
-        const credits = Number((pSnap.data() as any)?.credits ?? 0);
-        if (credits < cost) throw new Error("Not enough credits");
-
-        const mSnap = await tx.get(mageRef);
-        if (!mSnap.exists()) throw new Error("Mage not found");
-        const mData = mSnap.data() as any;
-        const curTileId = String(mData.tileId ?? "");
-
-        const okAdj = neighbors(Number(curTileId)).includes(mageMoveToTileId);
-        if (!okAdj) throw new Error("Mage move must be adjacent");
-
-        const dSnap = await tx.get(destTileRef);
-        if (!dSnap.exists()) throw new Error("Destination tile not found");
-        const dData = dSnap.data() as any;
-
-        if (!!dData.isBasecamp) throw new Error("Mage cannot be on a basecamp");
-        if ((dData.ownerPlayerId ?? null) !== playerId)
-          throw new Error("Mage can only move to a tile you control");
-
-        tx.update(playerRef, { credits: credits - cost });
-        tx.update(mageRef, { tileId: mageMoveToTileId });
-      });
-
-      const movedTo = mageMoveToTileId; // keep before reset
-      setMageMoveToTileId("");
-      setStatus(`✅ Mage moved to tile #${movedTo}. Cost: ${cost} credits`);
-    } catch (err: any) {
-      console.error(err);
-      setStatus(`❌ ${err?.message ?? String(err)}`);
-    }
-  }
+ 
 
 const ui = {
   page: {
@@ -3052,49 +2986,6 @@ return (
 
               <button onClick={teleportMoveWithMage} style={{ ...ui.button, marginTop: 10, width: "fit-content" }}>
                 Teleport move
-              </button>
-            </>
-          )}
-        </section>
-
-        {/* Move Mage adjacent (under teleport) */}
-        <section style={ui.card}>
-          <h2 style={ui.cardTitle}>Move Mage (adjacent)</h2>
-
-          {!mage ? (
-            <div style={{ opacity: 0.85 }}>❌ You don’t own a Mage yet.</div>
-          ) : (
-            <>
-              <div style={{ marginBottom: 8 }}>
-                Mage currently on: <strong>#{mage.tileId}</strong> — Cost: <strong>1000</strong> credits
-              </div>
-
-              <label style={{ fontSize: 12 }}>
-                TO (adjacent, must be your tile)
-                <br />
-                <select
-                  value={mageMoveToTileId}
-                  onChange={(e) => setMageMoveToTileId(e.target.value)}
-                  style={{
-                    padding: 10,
-                    width: "100%",
-                    borderRadius: 12,
-                    border: "1px solid rgba(243,231,207,0.18)",
-                    background: "rgba(0,0,0,0.18)",
-                    color: "#f3e7cf",
-                  }}
-                >
-                  <option value="">— choose —</option>
-                  {mageMoveOptions.map((id) => (
-                    <option key={id} value={id}>
-                      #{id}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <button onClick={moveMageAdjacent} style={{ ...ui.button, marginTop: 10, width: "fit-content" }}>
-                Move Mage
               </button>
             </>
           )}
