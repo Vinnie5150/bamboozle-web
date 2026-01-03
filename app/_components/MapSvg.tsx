@@ -26,12 +26,21 @@ export default function MapSvg({
   const VIEW_H = 600;
   const PAD = 40;
 
-  const tileById = useMemo(() => new Map(tiles.map((t) => [String(t.id), t])), [tiles]);
-  const highlightSet = useMemo(() => new Set((highlightTileIds ?? []).map(String)), [highlightTileIds]);
+  const tileById = useMemo(
+    () => new Map(tiles.map((t) => [String(t.id), t] as const)),
+    [tiles]
+  );
+  const highlightSet = useMemo(
+    () => new Set((highlightTileIds ?? []).map(String)),
+    [highlightTileIds]
+  );
 
   // Auto-fit the hex blob into 1150x600
   const { s, tx, ty, centers } = useMemo(() => {
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
 
     // bbox from centers + approximate radius
     const approxR = 55;
@@ -45,7 +54,10 @@ export default function MapSvg({
     const rawW = maxX - minX;
     const rawH = maxY - minY;
 
-    const scale = Math.min((VIEW_W - 2 * PAD) / rawW, (VIEW_H - 2 * PAD) / rawH);
+    const scale = Math.min(
+      (VIEW_W - 2 * PAD) / rawW,
+      (VIEW_H - 2 * PAD) / rawH
+    );
     const bboxW = rawW * scale;
     const bboxH = rawH * scale;
 
@@ -60,7 +72,14 @@ export default function MapSvg({
   }, []);
 
   return (
-    <div style={{ border: "1px solid #6b5b45", borderRadius: 14, padding: 10, background: "#1f1a12" }}>
+    <div
+      style={{
+        border: "1px solid #6b5b45",
+        borderRadius: 14,
+        padding: 10,
+        background: "#1f1a12",
+      }}
+    >
       <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} width="100%" style={{ display: "block" }}>
         <defs>
           {/* Sea gradient */}
@@ -104,101 +123,91 @@ export default function MapSvg({
               <feMergeNode in="SourceGraphic" />
             </feMerge>
           </filter>
-
         </defs>
 
         {/* Background image */}
-          <image
-            href="/maps/fantasy-bg.png"
-            x="0"
-            y="0"
-            width={VIEW_W}
-            height={VIEW_H}
-            preserveAspectRatio="xMidYMid slice"
-            opacity="1"
-            style={{ pointerEvents: "none" }}
-          />
+        <image
+          href="/maps/fantasy-bg.png"
+          x="0"
+          y="0"
+          width={VIEW_W}
+          height={VIEW_H}
+          preserveAspectRatio="xMidYMid slice"
+          opacity="1"
+          style={{ pointerEvents: "none" }}
+        />
 
-          {/* Map title */}
-            <text
-              x={VIEW_W / 2}
-              y={50}
-              textAnchor="middle"
-              fontFamily="'Cinzel', serif"
-              fontSize="60"
-              letterSpacing="10"
-              fill="#3b2a1a"
-              opacity="0.95"
-              pointerEvents="none"
-              filter="url(#titleGlow)"
-            >
-              HORGOTH
-            </text>
+        {/* Map title */}
+        <text
+          x={VIEW_W / 2}
+          y={50}
+          textAnchor="middle"
+          fontFamily="'Cinzel', serif"
+          fontSize="60"
+          letterSpacing="10"
+          fill="#3b2a1a"
+          opacity="0.95"
+          pointerEvents="none"
+          filter="url(#titleGlow)"
+        >
+          HORGOTH
+        </text>
 
-            {/* Title outline */}
-            <text
-              x={VIEW_W / 2}
-              y={50}
-              textAnchor="middle"
-              fontFamily="'Cinzel', serif"
-              fontSize="60"
-              letterSpacing="10"
-              fill="none"
-              stroke="#f3e7cf"
-              strokeWidth="2"
-              opacity="0.9"
-              pointerEvents="none"
-              
-            >
-              HORGOTH
-            </text>
+        {/* Title outline */}
+        <text
+          x={VIEW_W / 2}
+          y={50}
+          textAnchor="middle"
+          fontFamily="'Cinzel', serif"
+          fontSize="60"
+          letterSpacing="10"
+          fill="none"
+          stroke="#f3e7cf"
+          strokeWidth="2"
+          opacity="0.9"
+          pointerEvents="none"
+        >
+          HORGOTH
+        </text>
 
+        {/* Light parchment wash so unit icons stay readable */}
+        <rect x="0" y="0" width={VIEW_W} height={VIEW_H} fill="#f3e7cf" opacity="0.35" pointerEvents="none" />
 
-          {/* Light parchment wash so unit icons stay readable */}
-          <rect
-            x="0"
-            y="0"
-            width={VIEW_W}
-            height={VIEW_H}
-            fill="#f3e7cf"
-            opacity="0.35"
-            pointerEvents="none"
-          />
-
-          {/* Subtle paper grain (your existing filter) */}
-          <rect
-            x="0"
-            y="0"
-            width={VIEW_W}
-            height={VIEW_H}
-            filter="url(#paperTexture)"
-            opacity="0.30"
-            pointerEvents="none"
-          />
-
+        {/* Subtle paper grain */}
+        <rect x="0" y="0" width={VIEW_W} height={VIEW_H} filter="url(#paperTexture)" opacity="0.30" pointerEvents="none" />
 
         {/* Tiles */}
         <g transform={`translate(${tx},${ty}) scale(${s})`}>
           {HEX_TILES_60.map((region, i) => {
-            const id = region.id; // "0".."59"
-            const t = tileById.get(id);
+            const id = String(region.id); // "0".."59"
+            const t = tileById.get(id);   // <-- echte game tile data
+
             const fill = colorForPlayer(t?.ownerPlayerId ?? null);
 
             const isSelected = String(selectedTileId ?? "") === id;
             const isHighlighted = highlightSet.has(id);
 
-            const stroke = isSelected ? "#1a120b" : isHighlighted ? "#2b2116" : "rgba(43,33,22,0.55)";
+            const stroke = isSelected
+              ? "#1a120b"
+              : isHighlighted
+              ? "#2b2116"
+              : "rgba(43,33,22,0.55)";
             const strokeWidth = isSelected ? 4 : isHighlighted ? 3 : 1.2;
-            const regionFilter = isSelected ? "url(#selectedGlow)" : isHighlighted ? "url(#highlightGlow)" : "url(#inkShadow)";
+            const regionFilter = isSelected
+              ? "url(#selectedGlow)"
+              : isHighlighted
+              ? "url(#highlightGlow)"
+              : "url(#inkShadow)";
 
             const c = centers[i];
 
             return (
-              <g key={id}>
+              <g key={id} filter={regionFilter}>
                 <path
                   d={region.d}
                   fill={fill}
-                  fillOpacity={region.ownerPlayerId ? 0.65 : 0.35}
+                  // ✅ FIX: opacity gebaseerd op tile owner (niet op layout region)
+                  fillOpacity={t?.ownerPlayerId ? 0.65 : 0.35}
                   stroke={stroke}
                   strokeWidth={strokeWidth}
                   strokeOpacity={1}
@@ -207,7 +216,6 @@ export default function MapSvg({
                   style={{ cursor: onSelectTile ? "pointer" : "default" }}
                   onClick={() => onSelectTile?.(id)}
                 />
-
 
                 {/* label */}
                 <text
