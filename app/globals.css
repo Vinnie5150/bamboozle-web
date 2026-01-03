@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0e0c08; /* ✅ default donker */
+  --foreground: #f3e7cf; /* ✅ default tekstkleur */
 }
 
 @theme inline {
@@ -12,15 +12,19 @@
   --font-mono: var(--font-geist-mono);
 }
 
+/* (optioneel) je kan dit laten staan, maar het is nu sowieso al donker */
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #0e0c08;
+    --foreground: #f3e7cf;
   }
 }
 
+html,
 body {
-  background: var(--background);
+  height: 100%;
+  margin: 0;
+  background: var(--background); /* ✅ nooit meer wit/grijs */
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
