@@ -26,14 +26,18 @@ export default function MapSvg({
   const VIEW_H = 600;
   const PAD = 40;
 
-  const tileById = useMemo(
-    () => new Map(tiles.map((t) => [String(t.id), t] as const)),
-    [tiles]
-  );
-  const highlightSet = useMemo(
-    () => new Set((highlightTileIds ?? []).map(String)),
-    [highlightTileIds]
-  );
+  const tileById = useMemo(() => new Map(tiles.map((t) => [String(t.id), t] as const)), [tiles]);
+  const highlightSet = useMemo(() => new Set((highlightTileIds ?? []).map(String)), [highlightTileIds]);
+
+  // label styling helpers
+  const label = {
+    idFont: 16,
+    troopFont: 14,
+    idDy: 2,
+    troopDy: 28,
+    textFill: "#1a120b",
+    strokeLight: "rgba(243,231,207,0.95)",
+  };
 
   // Auto-fit the hex blob into 1150x600
   const { s, tx, ty, centers } = useMemo(() => {
@@ -54,10 +58,7 @@ export default function MapSvg({
     const rawW = maxX - minX;
     const rawH = maxY - minY;
 
-    const scale = Math.min(
-      (VIEW_W - 2 * PAD) / rawW,
-      (VIEW_H - 2 * PAD) / rawH
-    );
+    const scale = Math.min((VIEW_W - 2 * PAD) / rawW, (VIEW_H - 2 * PAD) / rawH);
     const bboxW = rawW * scale;
     const bboxH = rawH * scale;
 
@@ -123,6 +124,11 @@ export default function MapSvg({
               <feMergeNode in="SourceGraphic" />
             </feMerge>
           </filter>
+
+          {/* Extra badge shadow */}
+          <filter id="badgeShadow" x="-40%" y="-40%" width="180%" height="180%">
+            <feDropShadow dx="0" dy="1.2" stdDeviation="1.2" floodColor="#000" floodOpacity="0.45" />
+          </filter>
         </defs>
 
         {/* Background image */}
@@ -180,94 +186,187 @@ export default function MapSvg({
         <g transform={`translate(${tx},${ty}) scale(${s})`}>
           {HEX_TILES_60.map((region, i) => {
             const id = String(region.id); // "0".."59"
-            const t = tileById.get(id);   // <-- echte game tile data
+            const t = tileById.get(id);
 
             const fill = colorForPlayer(t?.ownerPlayerId ?? null);
 
             const isSelected = String(selectedTileId ?? "") === id;
             const isHighlighted = highlightSet.has(id);
 
-            const stroke = isSelected
-              ? "#1a120b"
-              : isHighlighted
-              ? "#2b2116"
-              : "rgba(43,33,22,0.55)";
+            const stroke = isSelected ? "#1a120b" : isHighlighted ? "#2b2116" : "rgba(43,33,22,0.55)";
             const strokeWidth = isSelected ? 4 : isHighlighted ? 3 : 1.2;
-            const regionFilter = isSelected
-              ? "url(#selectedGlow)"
-              : isHighlighted
-              ? "url(#highlightGlow)"
-              : "url(#inkShadow)";
+            const regionFilter = isSelected ? "url(#selectedGlow)" : isHighlighted ? "url(#highlightGlow)" : "url(#inkShadow)";
 
             const c = centers[i];
+            const clickable = !!onSelectTile;
+            const cursor = clickable ? "pointer" : "default";
+            const onPick = () => onSelectTile?.(id);
+
+            // troops
+            const troops = tileTroops[id] ?? { foot: 0, cav: 0, arch: 0 };
+            const hasAnyTroops = troops.foot > 0 || troops.cav > 0 || troops.arch > 0;
+
+            // build troops text
+            const troopParts = [
+              troops.foot > 0 ? `🗡️${troops.foot}` : "",
+              troops.cav > 0 ? `🐎${troops.cav}` : "",
+              troops.arch > 0 ? `🏹${troops.arch}` : "",
+            ].filter(Boolean);
+            const troopText = troopParts.join("  ");
+
+            // sizes for badges (simple estimates)
+            const idText = id;
+            const isTwo = idText.length >= 2;
+            const idW = isTwo ? 24 : 20;
+            const idH = 18;
+
+            const estChar = 7; // rough px per char
+            const troopW = Math.min(180, Math.max(70, troopText.length * estChar));
+            const troopH = 20;
+
+            // icon badges
+            const hasMageHere = !!mageByTile?.[id];
+            const isBasecamp = !!t?.isBasecamp;
 
             return (
               <g key={id} filter={regionFilter}>
                 <path
                   d={region.d}
                   fill={fill}
-                  // ✅ FIX: opacity gebaseerd op tile owner (niet op layout region)
                   fillOpacity={t?.ownerPlayerId ? 0.65 : 0.35}
                   stroke={stroke}
                   strokeWidth={strokeWidth}
                   strokeOpacity={1}
                   strokeLinejoin="round"
                   vectorEffect="non-scaling-stroke"
-                  style={{ cursor: onSelectTile ? "pointer" : "default" }}
-                  onClick={() => onSelectTile?.(id)}
+                  style={{ cursor }}
+                  onClick={onPick}
                 />
 
-                {/* label */}
-                <text
-                  x={c.cx}
-                  y={c.cy}
-                  textAnchor="middle"
-                  fontSize="12"
-                  fill="#1a120b"
-                  opacity={0.70}
-                  stroke="rgba(243,231,207,0.9)"
-                  strokeWidth={2}
-                  paintOrder="stroke"
-                  style={{ userSelect: "none", fontFamily: "Georgia, 'Times New Roman', serif" }}
-                  onClick={() => onSelectTile?.(id)}
-                >
-                  {id}
-                </text>
+                {/* ===== TILE ID BADGE ===== */}
+                <g onClick={onPick} style={{ cursor }}>
+                  <rect
+                    x={c.cx - idW / 2}
+                    y={c.cy - idH / 2 - 2}
+                    width={idW}
+                    height={idH}
+                    rx={6}
+                    ry={6}
+                    fill="rgba(0,0,0,0.38)"
+                    stroke="rgba(243,231,207,0.50)"
+                    strokeWidth={1}
+                    filter="url(#badgeShadow)"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                  <text
+                    x={c.cx}
+                    y={c.cy + label.idDy}
+                    textAnchor="middle"
+                    fontSize={label.idFont}
+                    fontWeight={800}
+                    fill={label.textFill}
+                    stroke={label.strokeLight}
+                    strokeWidth={3}
+                    paintOrder="stroke"
+                    opacity={0.98}
+                    style={{ userSelect: "none", fontFamily: "Georgia, 'Times New Roman', serif" }}
+                  >
+                    {idText}
+                  </text>
+                </g>
 
-                {/* troops */}
-                {(() => {
-                  const troops = tileTroops[id] ?? { foot: 0, cav: 0, arch: 0 };
-                  const hasAny = troops.foot > 0 || troops.cav > 0 || troops.arch > 0;
-                  if (!hasAny) return null;
-
-                  return (
+                {/* ===== TROOPS BADGE ===== */}
+                {hasAnyTroops ? (
+                  <g onClick={onPick} style={{ cursor }}>
+                    <rect
+                      x={c.cx - troopW / 2}
+                      y={c.cy + label.troopDy - troopH + 2}
+                      width={troopW}
+                      height={troopH}
+                      rx={8}
+                      ry={8}
+                      fill="rgba(0,0,0,0.42)"
+                      stroke="rgba(243,231,207,0.45)"
+                      strokeWidth={1}
+                      filter="url(#badgeShadow)"
+                      vectorEffect="non-scaling-stroke"
+                    />
                     <text
                       x={c.cx}
-                      y={c.cy + 18}
+                      y={c.cy + label.troopDy}
                       textAnchor="middle"
-                      fontSize="12"
-                      fill="#1a120b"
+                      fontSize={label.troopFont}
+                      fontWeight={800}
+                      fill={label.textFill}
+                      stroke={label.strokeLight}
+                      strokeWidth={2.5}
+                      paintOrder="stroke"
                       style={{ userSelect: "none", fontFamily: "Georgia, 'Times New Roman', serif" }}
                     >
-                      {troops.foot > 0 ? `🗡️${troops.foot} ` : ""}
-                      {troops.cav > 0 ? `🐎${troops.cav} ` : ""}
-                      {troops.arch > 0 ? `🏹${troops.arch}` : ""}
+                      {troopText}
                     </text>
-                  );
-                })()}
+                  </g>
+                ) : null}
 
-                {/* mage */}
-                {mageByTile?.[id] && (
-                  <text x={c.cx + 18} y={c.cy - 16} textAnchor="middle" fontSize="16" style={{ userSelect: "none" }}>
-                    🧙
-                  </text>
-                )}
+                {/* ===== ICON BADGES (Mage / Basecamp) ===== */}
+                {(hasMageHere || isBasecamp) && (
+                  <g onClick={onPick} style={{ cursor }}>
+                    {/* Mage badge (top-right of center) */}
+                    {hasMageHere && (
+                      <g>
+                        <circle
+                          cx={c.cx + 22}
+                          cy={c.cy - 18}
+                          r={10}
+                          fill="rgba(0,0,0,0.45)"
+                          stroke="rgba(243,231,207,0.55)"
+                          strokeWidth={1}
+                          filter="url(#badgeShadow)"
+                          vectorEffect="non-scaling-stroke"
+                        />
+                        <text
+                          x={c.cx + 22}
+                          y={c.cy - 14}
+                          textAnchor="middle"
+                          fontSize="14"
+                          stroke="rgba(243,231,207,0.95)"
+                          strokeWidth={2}
+                          paintOrder="stroke"
+                          style={{ userSelect: "none" }}
+                        >
+                          🧙
+                        </text>
+                      </g>
+                    )}
 
-                {/* basecamp */}
-                {t?.isBasecamp && (
-                  <text x={c.cx} y={c.cy - 16} textAnchor="middle" fontSize="16" style={{ userSelect: "none" }}>
-                    🏰
-                  </text>
+                    {/* Basecamp badge (top-left of center) */}
+                    {isBasecamp && (
+                      <g>
+                        <circle
+                          cx={c.cx - 22}
+                          cy={c.cy - 18}
+                          r={10}
+                          fill="rgba(0,0,0,0.45)"
+                          stroke="rgba(243,231,207,0.55)"
+                          strokeWidth={1}
+                          filter="url(#badgeShadow)"
+                          vectorEffect="non-scaling-stroke"
+                        />
+                        <text
+                          x={c.cx - 22}
+                          y={c.cy - 14}
+                          textAnchor="middle"
+                          fontSize="14"
+                          stroke="rgba(243,231,207,0.95)"
+                          strokeWidth={2}
+                          paintOrder="stroke"
+                          style={{ userSelect: "none" }}
+                        >
+                          🏰
+                        </text>
+                      </g>
+                    )}
+                  </g>
                 )}
               </g>
             );
