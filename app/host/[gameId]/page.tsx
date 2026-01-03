@@ -1421,6 +1421,23 @@ const ui = {
     backdropFilter: "blur(6px)",
     boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
   } as const,
+    headerRight: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+  } as const,
+
+  pill: {
+    fontSize: 12,
+    padding: "6px 10px",
+    borderRadius: 999,
+    border: "1px solid rgba(243,231,207,0.18)",
+    background: "rgba(243,231,207,0.06)",
+    whiteSpace: "nowrap",
+  } as const,
+
   title: {
     fontFamily: "var(--font-cinzel), serif",
     letterSpacing: 2,
