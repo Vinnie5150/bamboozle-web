@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { onAuthStateChanged, signInAnonymously } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
@@ -28,23 +28,26 @@ export default function StartPositionPage() {
   const gameId = params.gameId as string;
   const playerId = params.playerId as string;
 
-  const [startUnits, setStartUnits] = useState<{ foot: number; cav: number; arch: number } | null>(null);
-  const [tiles, setTiles] = useState<Tile[]>([]);
-  const [basecamp, setBasecamp] = useState<Tile | null>(null);
-  const [status, setStatus] = useState("");
-
-  // ✅ auth gating
   const [authReady, setAuthReady] = useState(false);
 
-  // Timer state (read-only)
-  const [startEndsAtMs, setStartEndsAtMs] = useState<number | null>(null);
-  const [startActive, setStartActive] = useState(false);
-  const [nowMs, setNowMs] = useState<number>(Date.now());
+  const [tiles, setTiles] = useState<Tile[]>([]);
+  const [basecamp, setBasecamp] = useState<Tile | null>(null);
+
+  const [startUnits, setStartUnits] = useState<{ foot: number; cav: number; arch: number } | null>(null);
   const [startReady, setStartReady] = useState(false);
 
   const [deployments, setDeployments] = useState<Record<string, { foot: number; cav: number; arch: number }>>({});
 
-  // ✅ Anonymous auth (sets authReady when done)
+  // Start phase timer state
+  const [startEndsAtMs, setStartEndsAtMs] = useState<number | null>(null);
+  const [startActive, setStartActive] = useState(false);
+  const [nowMs, setNowMs] = useState<number>(Date.now());
+
+  const [status, setStatus] = useState("");
+
+  // -----------------------------
+  // Auth
+  // -----------------------------
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) {
@@ -62,45 +65,7 @@ export default function StartPositionPage() {
     return () => unsub();
   }, []);
 
-  // load tiles
-  useEffect(() => {
-    if (!authReady) return;
-
-    const unsub = onSnapshot(collection(db, "games", gameId, "tiles"), (snap) => {
-      const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }) as Tile);
-      setTiles(list);
-
-      const bc =
-        list.find((t) => t.isBasecamp && t.basecampOwnerPlayerId === playerId) ?? null;
-      setBasecamp(bc);
-    });
-
-    return () => unsub();
-  }, [gameId, playerId, authReady]);
-
-  // listen to game timer
-  useEffect(() => {
-    if (!authReady) return;
-
-    const ref = doc(db, "games", gameId);
-
-    const unsub = onSnapshot(ref, (snap) => {
-      const data = snap.data() as any;
-      const startClaim = data?.startClaim ?? null;
-
-      setStartActive(!!startClaim?.active);
-
-      const endsAt = startClaim?.endsAt?.toDate?.()
-        ? startClaim.endsAt.toDate()
-        : null;
-
-      setStartEndsAtMs(endsAt ? endsAt.getTime() : null);
-    });
-
-    return () => unsub();
-  }, [gameId, authReady]);
-
-  // local ticking clock for countdown
+  // Local ticking clock for countdown
   useEffect(() => {
     const t = setInterval(() => setNowMs(Date.now()), 250);
     return () => clearInterval(t);
@@ -111,11 +76,134 @@ export default function StartPositionPage() {
       ? Math.max(0, Math.ceil((startEndsAtMs - nowMs) / 1000))
       : null;
 
-  const isLocked =
-    startReady ||
-    !startActive ||
-    (startEndsAtMs !== null && nowMs >= startEndsAtMs);
+  // start is locked if:
+  // - player already startReady
+  // - host locked startActive false
+  // - timer elapsed
+  const startLockedByTime = startEndsAtMs !== null && nowMs >= startEndsAtMs;
+  const isLocked = startReady || !startActive || startLockedByTime;
 
+  // -----------------------------
+  // Listen: game doc (startClaim)
+  // + auto redirect when start becomes inactive / time elapsed
+  // -----------------------------
+  useEffect(() => {
+    if (!authReady) return;
+
+    const gameRef = doc(db, "games", gameId);
+
+    const unsub = onSnapshot(gameRef, (snap) => {
+      const data = snap.data() as any;
+      const startClaim = data?.startClaim ?? null;
+
+      const active = !!startClaim?.active;
+      setStartActive(active);
+
+      const endsAt = startClaim?.endsAt?.toDate?.()
+        ? startClaim.endsAt.toDate()
+        : null;
+
+      setStartEndsAtMs(endsAt ? endsAt.getTime() : null);
+
+      // ✅ If host ended start phase, redirect (unless already on play page)
+      if (!active) {
+        router.replace(`/play/${gameId}/${playerId}`);
+      }
+    });
+
+    return () => unsub();
+  }, [authReady, gameId, playerId, router]);
+
+  // ✅ also redirect if timer elapsed (covers case where startActive still true but time passed)
+  useEffect(() => {
+    if (!authReady) return;
+    if (startLockedByTime) {
+      router.replace(`/play/${gameId}/${playerId}`);
+    }
+  }, [authReady, startLockedByTime, gameId, playerId, router]);
+
+  // -----------------------------
+  // Listen: tiles
+  // -----------------------------
+  useEffect(() => {
+    if (!authReady) return;
+
+    const unsub = onSnapshot(collection(db, "games", gameId, "tiles"), (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }) as Tile);
+      setTiles(list);
+
+      const bc =
+        list.find((t) => t.isBasecamp && t.basecampOwnerPlayerId === playerId) ?? null;
+
+      setBasecamp(bc);
+    });
+
+    return () => unsub();
+  }, [authReady, gameId, playerId]);
+
+  // -----------------------------
+  // Listen: player doc (startReady + startUnits)
+  // + auto redirect when host sets startReady true (Finalize & fill remainder)
+  // -----------------------------
+  useEffect(() => {
+    if (!authReady) return;
+
+    const playerRef = doc(db, "games", gameId, "players", playerId);
+
+    const unsub = onSnapshot(playerRef, (snap) => {
+      const data = snap.data() as any;
+
+      const ready = !!data?.startReady;
+      setStartReady(ready);
+
+      // ✅ Host “Finalize start + fill remainder” will set startReady true -> redirect automatically
+      if (ready) {
+        router.replace(`/play/${gameId}/${playerId}`);
+        return;
+      }
+
+      const su = data?.startUnits ?? data?.units ?? null;
+      if (su) {
+        setStartUnits({
+          foot: Number(su.foot ?? 0),
+          cav: Number(su.cav ?? 0),
+          arch: Number(su.arch ?? 0),
+        });
+      } else {
+        setStartUnits(null);
+      }
+    });
+
+    return () => unsub();
+  }, [authReady, gameId, playerId, router]);
+
+  // -----------------------------
+  // Listen: deployments
+  // -----------------------------
+  useEffect(() => {
+    if (!authReady) return;
+
+    const depCol = collection(db, "games", gameId, "deployments", playerId, "tiles");
+
+    const unsub = onSnapshot(depCol, (snap) => {
+      const next: Record<string, { foot: number; cav: number; arch: number }> = {};
+      snap.docs.forEach((d) => {
+        const data = d.data() as any;
+        next[d.id] = {
+          foot: Number(data.foot ?? 0),
+          cav: Number(data.cav ?? 0),
+          arch: Number(data.arch ?? 0),
+        };
+      });
+      setDeployments(next);
+    });
+
+    return () => unsub();
+  }, [authReady, gameId, playerId]);
+
+  // -----------------------------
+  // Actions
+  // -----------------------------
   async function claimStartTile(tileId: string) {
     if (!authReady) {
       setStatus("⏳ Waiting for login...");
@@ -124,7 +212,6 @@ export default function StartPositionPage() {
     if (!basecamp) return;
 
     if (isLocked) {
-      // ✅ fixed: string must be quoted
       setStatus("⏱️ Start phase is locked. You can’t claim more tiles.");
       return;
     }
@@ -135,7 +222,6 @@ export default function StartPositionPage() {
     const isAdjacent = isNeighbor(String(basecampId), String(tileId));
     const isBasecampTile = tileId === basecampId;
 
-    // Alleen basecamp of adjacent tiles
     if (!isBasecampTile && !isAdjacent) {
       setStatus("❌ Only basecamp or adjacent tiles are allowed");
       return;
@@ -156,18 +242,17 @@ export default function StartPositionPage() {
 
         const isOwnBasecamp = tileIsBasecamp && basecampOwner === playerId;
 
-        // Nooit vijandelijk basecamp
         if (tileIsBasecamp && !isOwnBasecamp) {
           throw new Error("You cannot claim an enemy basecamp");
         }
 
-        // Eigen basecamp: owner bestaat al, enkel start flag zetten
+        // Own basecamp: just mark as start tile
         if (isOwnBasecamp) {
           tx.update(tileRef, { isStartTile: true });
           return;
         }
 
-        // Adjacent tile: vrij of al van jou
+        // Adjacent tile: must be free or already yours
         if (owner && owner !== playerId) {
           throw new Error("Tile already taken");
         }
@@ -184,76 +269,6 @@ export default function StartPositionPage() {
       setStatus(`❌ ${err?.message ?? String(err)}`);
     }
   }
-
-  // listen player doc (startReady + startUnits)
-  useEffect(() => {
-    if (!authReady) return;
-
-    const ref = doc(db, "games", gameId, "players", playerId);
-
-    const unsub = onSnapshot(ref, (snap) => {
-      const data = snap.data() as any;
-      setStartReady(!!data?.startReady);
-
-      const su = data?.startUnits ?? data?.units ?? null; // fallback
-      if (su) {
-        setStartUnits({
-          foot: Number(su.foot ?? 0),
-          cav: Number(su.cav ?? 0),
-          arch: Number(su.arch ?? 0),
-        });
-      } else {
-        setStartUnits(null);
-      }
-    });
-
-    return () => unsub();
-  }, [gameId, playerId, authReady]);
-
-  async function markReady() {
-    if (!authReady) {
-      setStatus("⏳ Waiting for login...");
-      return;
-    }
-
-    setStatus("Locking in...");
-
-    const ref = doc(db, "games", gameId, "players", playerId);
-
-    await setDoc(
-      ref,
-      {
-        startReady: true,
-        startReadyAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
-
-    // ✅ auto go to the real player page
-    router.push(`/play/${gameId}/${playerId}`);
-  }
-
-  // listen deployments
-  useEffect(() => {
-    if (!authReady) return;
-
-    const depCol = collection(db, "games", gameId, "deployments", playerId, "tiles");
-
-    const unsub = onSnapshot(depCol, (snap) => {
-      const next: Record<string, { foot: number; cav: number; arch: number }> = {};
-      snap.docs.forEach((d) => {
-        const data = d.data() as any;
-        next[d.id] = {
-          foot: Number(data.foot ?? 0),
-          cav: Number(data.cav ?? 0),
-          arch: Number(data.arch ?? 0),
-        };
-      });
-      setDeployments(next);
-    });
-
-    return () => unsub();
-  }, [gameId, playerId, authReady]);
 
   async function setDeployment(
     tileId: string,
@@ -277,7 +292,7 @@ export default function StartPositionPage() {
       arch: patch.arch ?? current.arch,
     };
 
-    // totals zonder deze tile
+    // totals excluding this tile
     const othersTotals = Object.entries(deployments).reduce(
       (acc, [id, d]) => {
         if (id === tileId) return acc;
@@ -317,64 +332,102 @@ export default function StartPositionPage() {
       { merge: true }
     );
 
-    setStatus(""); // clear error
+    setStatus("");
   }
 
-  const deployedTotals = Object.values(deployments).reduce(
-    (acc, d) => ({
-      foot: acc.foot + (d.foot ?? 0),
-      cav: acc.cav + (d.cav ?? 0),
-      arch: acc.arch + (d.arch ?? 0),
-    }),
-    { foot: 0, cav: 0, arch: 0 }
-  );
+  async function markReady() {
+    if (!authReady) {
+      setStatus("⏳ Waiting for login...");
+      return;
+    }
 
-  const remaining = startUnits
-    ? {
-        foot: Math.max(0, startUnits.foot - deployedTotals.foot),
-        cav: Math.max(0, startUnits.cav - deployedTotals.cav),
-        arch: Math.max(0, startUnits.arch - deployedTotals.arch),
-        }
-    : null;
+    setStatus("Locking in...");
 
+    const ref = doc(db, "games", gameId, "players", playerId);
+
+    await setDoc(
+      ref,
+      {
+        startReady: true,
+        startReadyAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    // ✅ immediate redirect; also covered by snapshot listener
+    router.replace(`/play/${gameId}/${playerId}`);
+  }
+
+  // -----------------------------
+  // Derived UI values
+  // -----------------------------
+  const deployedTotals = useMemo(() => {
+    return Object.values(deployments).reduce(
+      (acc, d) => ({
+        foot: acc.foot + (d.foot ?? 0),
+        cav: acc.cav + (d.cav ?? 0),
+        arch: acc.arch + (d.arch ?? 0),
+      }),
+      { foot: 0, cav: 0, arch: 0 }
+    );
+  }, [deployments]);
+
+  const remaining = useMemo(() => {
+    if (!startUnits) return null;
+    return {
+      foot: Math.max(0, startUnits.foot - deployedTotals.foot),
+      cav: Math.max(0, startUnits.cav - deployedTotals.cav),
+      arch: Math.max(0, startUnits.arch - deployedTotals.arch),
+    };
+  }, [startUnits, deployedTotals]);
+
+  const claimableTileIds = useMemo(() => {
+    if (!basecamp) return [];
+    const base = HEX_TILES_60.find((t) => t.id === String(basecamp.id));
+    if (!base) return [];
+    return [base.id, ...base.neighbors];
+  }, [basecamp]);
+
+  // -----------------------------
+  // UI
+  // -----------------------------
   return (
     <main style={{ padding: 24 }}>
       <h1>Choose your start position</h1>
-      <p>Player: {playerId}</p>
+      <p>
+        Game: <strong>{gameId}</strong> — Player: <strong>{playerId}</strong>
+      </p>
 
       <div style={{ marginTop: 12 }}>
         <div>
           Start phase: <strong>{startActive ? "ACTIVE" : "INACTIVE"}</strong>
         </div>
         <div>
-          Time left: <strong>{timeLeftSec === null ? "-" : `${timeLeftSec}s`}</strong>
+          Time left:{" "}
+          <strong>{timeLeftSec === null ? "-" : `${timeLeftSec}s`}</strong>
         </div>
 
         <div style={{ marginTop: 8 }}>
           <strong>Start units:</strong>{" "}
-          {startUnits ? `Foot ${startUnits.foot}, Cav ${startUnits.cav}, Arch ${startUnits.arch}` : "—"}
+          {startUnits
+            ? `Foot ${startUnits.foot}, Cav ${startUnits.cav}, Arch ${startUnits.arch}`
+            : "—"}
         </div>
 
         <div>
-          <strong>Deployed:</strong> Foot {deployedTotals.foot}, Cav {deployedTotals.cav}, Arch {deployedTotals.arch}
+          <strong>Deployed:</strong> Foot {deployedTotals.foot}, Cav{" "}
+          {deployedTotals.cav}, Arch {deployedTotals.arch}
         </div>
 
         <div>
           <strong>Remaining:</strong>{" "}
-          {remaining ? `Foot ${remaining.foot}, Cav ${remaining.cav}, Arch ${remaining.arch}` : "—"}
+          {remaining
+            ? `Foot ${remaining.foot}, Cav ${remaining.cav}, Arch ${remaining.arch}`
+            : "—"}
         </div>
 
-        {isLocked && (
-          <div style={{ marginTop: 8 }}>
-            ⏱️ Locked — no more start tiles can be claimed.
-          </div>
-        )}
-
-        {!authReady && (
-          <div style={{ marginTop: 8 }}>
-            🔐 Logging in (anonymous)...
-          </div>
-        )}
+        {!authReady && <div style={{ marginTop: 8 }}>🔐 Logging in...</div>}
+        {isLocked && <div style={{ marginTop: 8 }}>⏱️ Locked.</div>}
       </div>
 
       {!basecamp && <p style={{ marginTop: 12 }}>Waiting for basecamp assignment...</p>}
@@ -384,19 +437,15 @@ export default function StartPositionPage() {
           <p style={{ marginTop: 12 }}>
             Your basecamp is tile <strong>#{basecamp.id}</strong>
           </p>
-          <p>Claim as many start tiles as you want (basecamp + adjacent tiles).</p>
+          <p>Claim start tiles (basecamp + adjacent) and deploy your start troops.</p>
 
-          <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-            {(() => {
-              const base = HEX_TILES_60.find((t) => t.id === String(basecamp.id));
-              if (!base) return [];
-              return [base.id, ...base.neighbors];
-            })().map((id) => {
+          <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+            {claimableTileIds.map((id) => {
               const t = tiles.find((x) => x.id === id);
               const isOwn = t?.ownerPlayerId === playerId;
               const isTakenByOther = !!t?.ownerPlayerId && t?.ownerPlayerId !== playerId;
 
-              const label = id === basecamp.id ? `🏠 Basecamp (#${id})` : `#${id}`;
+              const label = id === basecamp.id ? `🏠 Basecamp (#${id})` : `Tile #${id}`;
 
               return (
                 <div
@@ -405,26 +454,26 @@ export default function StartPositionPage() {
                     border: "1px solid #ccc",
                     borderRadius: 10,
                     padding: 10,
-                    minWidth: 220,
+                    minWidth: 230,
                     opacity: isTakenByOther ? 0.4 : 1,
                   }}
                 >
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <button
-                      disabled={!authReady || isLocked || isTakenByOther}
-                      onClick={() => claimStartTile(id)}
-                      style={{
-                        padding: "8px 12px",
-                        border: "1px solid black",
-                        borderRadius: 8,
-                        cursor: !authReady || isLocked || isTakenByOther ? "not-allowed" : "pointer",
-                      }}
-                    >
-                      {label} {isOwn ? "✅" : ""}
-                    </button>
-                  </div>
+                  <button
+                    disabled={!authReady || isLocked || isTakenByOther}
+                    onClick={() => claimStartTile(id)}
+                    style={{
+                      padding: "8px 12px",
+                      border: "1px solid black",
+                      borderRadius: 8,
+                      cursor: !authReady || isLocked || isTakenByOther ? "not-allowed" : "pointer",
+                      width: "100%",
+                      textAlign: "left",
+                    }}
+                  >
+                    {label} {isOwn ? "✅" : ""}
+                  </button>
 
-                  <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <label style={{ fontSize: 12 }}>
                       Foot{" "}
                       <input
@@ -432,7 +481,7 @@ export default function StartPositionPage() {
                         value={deployments[id]?.foot ?? 0}
                         disabled={!authReady || isLocked || !isOwn}
                         onChange={(e) => setDeployment(id, { foot: Number(e.target.value) })}
-                        style={{ width: 60 }}
+                        style={{ width: 62 }}
                         min={0}
                       />
                     </label>
@@ -444,7 +493,7 @@ export default function StartPositionPage() {
                         value={deployments[id]?.cav ?? 0}
                         disabled={!authReady || isLocked || !isOwn}
                         onChange={(e) => setDeployment(id, { cav: Number(e.target.value) })}
-                        style={{ width: 60 }}
+                        style={{ width: 62 }}
                         min={0}
                       />
                     </label>
@@ -456,7 +505,7 @@ export default function StartPositionPage() {
                         value={deployments[id]?.arch ?? 0}
                         disabled={!authReady || isLocked || !isOwn}
                         onChange={(e) => setDeployment(id, { arch: Number(e.target.value) })}
-                        style={{ width: 60 }}
+                        style={{ width: 62 }}
                         min={0}
                       />
                     </label>
@@ -489,9 +538,8 @@ export default function StartPositionPage() {
         I’m ready (lock in)
       </button>
 
-      {startReady && <p style={{ marginTop: 8 }}>✅ You are locked in.</p>}
-
       <p style={{ marginTop: 16 }}>{status}</p>
     </main>
   );
 }
+
