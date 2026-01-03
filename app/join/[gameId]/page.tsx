@@ -23,9 +23,9 @@ export default function JoinGamePage() {
     () => [
       { id: "anton", label: "Anton", value: "/avatars/Anton.jpg" },
       { id: "arne", label: "Arne", value: "/avatars/Arne.jpg" },
-      { id: "elizabeth", label: "Elizabeth", value: "/avatars/elizabeth.jpg" },
+      { id: "elizabeth", label: "Elizabeth", value: "/avatars/Elizabeth.jpg" },
       { id: "jochen", label: "Jochen", value: "/avatars/Jochen.jpg" },
-      { id: "stijn", label: "Stijn", value: "/avatars/stijn.jpg" },
+      { id: "stijn", label: "Stijn", value: "/avatars/Stijn.jpg" },
       { id: "tim", label: "Tim", value: "/avatars/Tim.jpg" },
       { id: "vinnie", label: "Vinnie", value: "/avatars/Vinnie.jpg" },
       { id: "wannie", label: "Wannie", value: "/avatars/Wannie.jpg" },
