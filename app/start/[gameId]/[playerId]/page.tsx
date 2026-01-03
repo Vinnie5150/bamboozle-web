@@ -1,12 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { onAuthStateChanged, signInAnonymously } from "firebase/auth";
-import { auth } from "@/lib/firebase";
-import { db } from "@/lib/firebase";
-import { isNeighbor } from "@/app/_components/tileLayout";
-import { HEX_TILES_60 } from "@/app/_components/tileLayout";
+import { auth, db } from "@/lib/firebase";
+import { isNeighbor, HEX_TILES_60 } from "@/app/_components/tileLayout";
 import {
   collection,
   doc,
@@ -26,6 +24,7 @@ type Tile = {
 
 export default function StartPositionPage() {
   const params = useParams();
+  const router = useRouter();
   const gameId = params.gameId as string;
   const playerId = params.playerId as string;
 
@@ -125,6 +124,7 @@ export default function StartPositionPage() {
     if (!basecamp) return;
 
     if (isLocked) {
+      // ✅ fixed: string must be quoted
       setStatus("⏱️ Start phase is locked. You can’t claim more tiles.");
       return;
     }
@@ -216,6 +216,8 @@ export default function StartPositionPage() {
       return;
     }
 
+    setStatus("Locking in...");
+
     const ref = doc(db, "games", gameId, "players", playerId);
 
     await setDoc(
@@ -227,7 +229,8 @@ export default function StartPositionPage() {
       { merge: true }
     );
 
-    setStatus("✅ Locked in. Waiting for others / timer.");
+    // ✅ auto go to the real player page
+    router.push(`/play/${gameId}/${playerId}`);
   }
 
   // listen deployments
@@ -331,7 +334,7 @@ export default function StartPositionPage() {
         foot: Math.max(0, startUnits.foot - deployedTotals.foot),
         cav: Math.max(0, startUnits.cav - deployedTotals.cav),
         arch: Math.max(0, startUnits.arch - deployedTotals.arch),
-      }
+        }
     : null;
 
   return (
