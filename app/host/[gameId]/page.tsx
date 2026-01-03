@@ -1428,6 +1428,12 @@ const ui = {
     margin: 0,
     lineHeight: 1,
   } as const,
+  subTitle: {
+    marginTop: 6,
+    fontSize: 12,
+    letterSpacing: 0.6,
+    opacity: 0.8,
+  } as const,
   chipRow: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" } as const,
   chip: {
     fontSize: 12,
