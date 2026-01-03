@@ -199,7 +199,12 @@ function isAdjacent(fromId: string, toId: string) {
   if (!fromId || !toId) return false;
   return isNeighbor(String(fromId), String(toId));
 }
-
+function neighborIds(fromId: string) {
+  const from = String(fromId);
+  return tiles
+    .map((t) => String(t.id))
+    .filter((to) => to !== from && isNeighbor(from, to));
+}
 
 useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -419,7 +424,9 @@ useEffect(() => {
   // MOVE: highlight neighbors van fromTileId
   if (mapAction === "MOVE") {
     if (!fromTileId) return [];
-    return neighbors(String(fromTileId));
+    return tiles
+  .map((t) => String(t.id))
+  .filter((to) => to !== String(fromTileId) && isNeighbor(String(fromTileId), to));
   }
 
   // TP: highlight neighbors van tpFromTileId (of alles, afhankelijk van jouw teleport rules)
@@ -434,10 +441,16 @@ useEffect(() => {
 
 
  
-  const toOptions = useMemo(() => {
-    if (!fromTileId) return [];
-    return neighbors(String(fromTileId));
-  }, [fromTileId]);
+ const toOptions = useMemo(() => {
+  if (!fromTileId) return [];
+  const from = String(fromTileId);
+
+  // ✅ echte hex-adjacent tiles volgens tileLayout.isNeighbor()
+  return tiles
+    .map((t) => String(t.id))
+    .filter((to) => to !== from && isNeighbor(from, to));
+}, [fromTileId, tiles]);
+
 
     
 
@@ -633,7 +646,7 @@ async function moveTroops() {
     return;
   }
 
-  const allowed = neighbors(String(fromTileId)).includes(String(toTileId));
+  const allowed = isAdjacent(fromTileId, toTileId);
   if (!allowed) {
     setStatus("❌ TO moet adjacent zijn aan FROM.");
     return;
