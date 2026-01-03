@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
+import type React from "react";
 import { useParams } from "next/navigation";
 import { db } from "@/lib/firebase";
 import { onAuthStateChanged, signInAnonymously } from "firebase/auth";
@@ -1497,6 +1498,155 @@ const ui = {
     color: "#ffd7d7",
     cursor: "pointer",
   } as const,
+    buttonGhost: {
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px dashed rgba(243,231,207,0.22)",
+    background: "transparent",
+    color: "#f3e7cf",
+    cursor: "pointer",
+  } as const,
+
+  helpText: {
+    marginTop: 10,
+    fontSize: 12,
+    opacity: 0.8,
+    lineHeight: 1.35,
+  } as const,
+
+  label: {
+    display: "grid",
+    gap: 6,
+    fontSize: 12,
+    opacity: 0.9,
+  } as const,
+
+  select: {
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid rgba(243,231,207,0.22)",
+    background: "rgba(0,0,0,0.25)",
+    color: "#f3e7cf",
+    outline: "none",
+  } as const,
+
+  selectFull: {
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid rgba(243,231,207,0.22)",
+    background: "rgba(0,0,0,0.25)",
+    color: "#f3e7cf",
+    outline: "none",
+    width: "100%",
+  } as const,
+
+  miniLabel: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    fontSize: 12,
+    opacity: 0.9,
+  } as const,
+
+  miniInput: {
+    width: 74,
+    padding: "8px 10px",
+    borderRadius: 10,
+    border: "1px solid rgba(243,231,207,0.22)",
+    background: "rgba(0,0,0,0.25)",
+    color: "#f3e7cf",
+    outline: "none",
+  } as const,
+
+  smallLabel: {
+    display: "grid",
+    gap: 6,
+    fontSize: 12,
+    opacity: 0.9,
+  } as const,
+
+  smallInput: {
+    width: 120,
+    padding: "8px 10px",
+    borderRadius: 10,
+    border: "1px solid rgba(243,231,207,0.22)",
+    background: "rgba(0,0,0,0.25)",
+    color: "#f3e7cf",
+    outline: "none",
+  } as const,
+
+  playerCard: {
+    borderRadius: 12,
+    border: "1px solid rgba(243,231,207,0.14)",
+    background: "rgba(0,0,0,0.18)",
+    padding: 12,
+  } as const,
+
+  subBox: {
+    borderRadius: 12,
+    border: "1px solid rgba(243,231,207,0.14)",
+    background: "rgba(0,0,0,0.14)",
+    padding: 12,
+  } as const,
+
+  subBoxTitle: {
+    fontFamily: "var(--font-cinzel), serif",
+    letterSpacing: 0.8,
+    fontSize: 13,
+    marginBottom: 10,
+    opacity: 0.95,
+  } as const,
+
+  legendPill: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "8px 10px",
+    borderRadius: 999,
+    border: "1px solid rgba(243,231,207,0.16)",
+    background: "rgba(0,0,0,0.18)",
+  } as const,
+
+  legendSwatch: {
+    width: 14,
+    height: 14,
+    borderRadius: 999,
+    border: "1px solid rgba(0,0,0,0.35)",
+    display: "inline-block",
+  } as const,
+
+  thLeft: {
+    textAlign: "left",
+    fontSize: 12,
+    opacity: 0.8,
+    padding: "8px 6px",
+    borderBottom: "1px solid rgba(243,231,207,0.14)",
+    whiteSpace: "nowrap",
+  } as const,
+
+  thRight: {
+    textAlign: "right",
+    fontSize: 12,
+    opacity: 0.8,
+    padding: "8px 6px",
+    borderBottom: "1px solid rgba(243,231,207,0.14)",
+    whiteSpace: "nowrap",
+  } as const,
+
+  tdLeft: {
+    textAlign: "left",
+    padding: "8px 6px",
+    borderBottom: "1px solid rgba(243,231,207,0.10)",
+    whiteSpace: "nowrap",
+  } as const,
+
+  tdRight: {
+    textAlign: "right",
+    padding: "8px 6px",
+    borderBottom: "1px solid rgba(243,231,207,0.10)",
+    whiteSpace: "nowrap",
+  } as const,
+
 };
 
 // UI block
