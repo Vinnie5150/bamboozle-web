@@ -275,38 +275,29 @@ export default function MapSvg({
                   </text>
                 </g>
 
-                {/* ===== TROOPS BADGE ===== */}
+                {/* ===== TROOPS (simple text, no badge) ===== */}
                 {hasAnyTroops ? (
-                  <g onClick={onPick} style={{ cursor }}>
-                    <rect
-                      x={c.cx - troopW / 2}
-                      y={c.cy + label.troopDy - troopH + 2}
-                      width={troopW}
-                      height={troopH}
-                      rx={8}
-                      ry={8}
-                      fill="rgba(0,0,0,0.42)"
-                      stroke="rgba(243,231,207,0.45)"
-                      strokeWidth={1}
-                      filter="url(#badgeShadow)"
-                      vectorEffect="non-scaling-stroke"
-                    />
-                    <text
-                      x={c.cx}
-                      y={c.cy + label.troopDy}
-                      textAnchor="middle"
-                      fontSize={label.troopFont}
-                      fontWeight={800}
-                      fill={label.textFill}
-                      stroke={label.strokeLight}
-                      strokeWidth={2.5}
-                      paintOrder="stroke"
-                      style={{ userSelect: "none", fontFamily: "Georgia, 'Times New Roman', serif" }}
-                    >
-                      {troopText}
-                    </text>
-                  </g>
+                  <text
+                    x={c.cx}
+                    y={c.cy + 22}
+                    textAnchor="middle"
+                    fontSize={12}              // ⬅ kleiner
+                    fontWeight={600}
+                    fill="#1a120b"
+                    opacity={0.85}
+                    stroke="rgba(243,231,207,0.75)" // ⬅ zachte outline
+                    strokeWidth={1.2}
+                    paintOrder="stroke"
+                    style={{
+                      userSelect: "none",
+                      fontFamily: "Georgia, 'Times New Roman', serif",
+                      pointerEvents: "none",    // ⬅ voorkomt per ongeluk klikken
+                    }}
+                  >
+                    {troopText}
+                  </text>
                 ) : null}
+
 
                 {/* ===== ICON BADGES (Mage / Basecamp) ===== */}
                 {(hasMageHere || isBasecamp) && (
