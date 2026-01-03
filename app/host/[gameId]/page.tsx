@@ -789,6 +789,39 @@ async function bamboozleDestroyDragonglass() {
   }
 
   const rankedPlayers = rankPlayers(players);
+  // ✅ publish ranking to Firestore so player pages can read it
+useEffect(() => {
+  if (!gameId) return;
+  if (!rankedPlayers || rankedPlayers.length === 0) return;
+
+  // build a compact map: playerId -> { rank, dominance, credits, troops }
+  const ranking: Record<
+    string,
+    { rank: number; dominance: number; credits: number; cav: number; arch: number; foot: number }
+  > = {};
+
+  rankedPlayers.forEach((p, idx) => {
+    ranking[String(p.id)] = {
+      rank: idx + 1,
+      dominance: Number(p.dominance ?? 0),
+      credits: Number(p.credits ?? 0),
+      cav: Number(p.u?.cav ?? 0),
+      arch: Number(p.u?.arch ?? 0),
+      foot: Number(p.u?.foot ?? 0),
+    };
+  });
+
+  // write into one stable doc
+  setDoc(
+    doc(db, "games", gameId, "meta", "ranking"),
+    {
+      ranking,
+      totalPlayers: rankedPlayers.length,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  ).catch((err) => console.error("Failed to publish ranking:", err));
+}, [gameId, rankedPlayers]);
 
 
 

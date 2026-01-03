@@ -117,6 +117,11 @@ export default function PlayPage() {
   >({});
 
   const [status, setStatus] = useState<string>("");
+  // ===== Ranking (from host published doc) =====
+const [myRank, setMyRank] = useState<number | null>(null);
+const [rankTotal, setRankTotal] = useState<number | null>(null);
+const [myDominance, setMyDominance] = useState<number | null>(null);
+
     // ===== Dart reward (free archer) =====
   const [dartPlaceTileId, setDartPlaceTileId] = useState<string>("");
 
@@ -238,6 +243,42 @@ useEffect(() => {
     });
     return () => unsub();
   }, [gameId, playerId]);
+
+  // ===== Ranking listener (published by host) =====
+useEffect(() => {
+  if (!gameId || !playerId) return;
+
+  const ref = doc(db, "games", gameId, "meta", "ranking");
+  const unsub = onSnapshot(ref, (snap) => {
+    if (!snap.exists()) {
+      setMyRank(null);
+      setRankTotal(null);
+      setMyDominance(null);
+      return;
+    }
+
+    const data = snap.data() as any;
+    const ranking = (data?.ranking ?? {}) as Record<
+      string,
+      { rank?: number; dominance?: number; credits?: number; cav?: number; arch?: number; foot?: number }
+    >;
+
+    const me = ranking[String(playerId)];
+
+    setMyRank(typeof me?.rank === "number" ? me.rank : null);
+    setMyDominance(typeof me?.dominance === "number" ? me.dominance : null);
+
+    const total =
+      typeof data?.totalPlayers === "number"
+        ? data.totalPlayers
+        : Object.keys(ranking).length;
+
+    setRankTotal(total || null);
+  });
+
+  return () => unsub();
+}, [gameId, playerId]);
+
 
     // mage doc (one per player)
   useEffect(() => {
@@ -2119,6 +2160,17 @@ return (
         <div style={ui.chip}>
           Credits: <strong>{Number(player?.credits ?? 0)}</strong>
         </div>
+        <div>
+            Ranking:{" "}
+            <strong>
+              {myRank ? `#${myRank}` : "—"}
+              {rankTotal ? ` / ${rankTotal}` : ""}
+            </strong>
+            {myDominance !== null ? (
+              <span style={{ opacity: 0.8 }}> (dominance: {myDominance})</span>
+            ) : null}
+          </div>
+
         <div style={ui.chip}>
           Basecamp: <strong>{basecamp ? `#${basecamp.id}` : "—"}</strong>
         </div>
