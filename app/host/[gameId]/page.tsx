@@ -2249,6 +2249,7 @@ return (
     )}
   </div>
 </div>
+</div>
 
 
     {/* ===== Bottom: Host controls (unchanged) + Pregame under it ===== */}
