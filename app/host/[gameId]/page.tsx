@@ -1704,7 +1704,7 @@ return (
 
     {/* ===== Main grid ===== */}
     <div style={ui.grid}>
-      {/* ================= LEFT: Map + Logs ================= */}
+      {/* ================= LEFT: Map + Legend + Bamboozle ================= */}
       <div style={{ display: "grid", gap: 14 }}>
         {/* Winter barometer ABOVE map */}
         <div style={ui.card}>
@@ -1769,41 +1769,54 @@ return (
 
         {/* Map */}
         <div style={ui.card}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 10,
+              flexWrap: "wrap",
+            }}
+          >
             <div style={ui.cardTitle}>🗺️ World Map</div>
 
             {/* Zoom controls */}
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <button type="button" onClick={() => zoomBy(-0.1)} style={ui.buttonGhost}>−</button>
+              <button type="button" onClick={() => zoomBy(-0.1)} style={ui.buttonGhost}>
+                −
+              </button>
               <div style={{ ...ui.pill, padding: "6px 10px" }}>
                 Zoom: <strong>{Math.round(mapZoom * 100)}%</strong>
               </div>
-              <button type="button" onClick={() => zoomBy(+0.1)} style={ui.buttonGhost}>+</button>
-              <button type="button" onClick={resetView} style={ui.buttonGhost}>Reset</button>
+              <button type="button" onClick={() => zoomBy(+0.1)} style={ui.buttonGhost}>
+                +
+              </button>
+              <button type="button" onClick={resetView} style={ui.buttonGhost}>
+                Reset
+              </button>
             </div>
           </div>
 
           {/* Viewport: ONLY the map zooms, not the rest */}
           <div
-              onWheel={onWheelZoom}
-              onMouseDown={onPanStart}
-              onMouseMove={onPanMove}
-              onMouseUp={onPanEnd}
-              onMouseLeave={onPanEnd}
-              style={{
-                marginTop: 10,
-                borderRadius: 12,
-                border: "1px solid rgba(243,231,207,0.12)",
-                overflow: "hidden",
-                background: "rgba(0,0,0,0.15)",
-                height: 640,
-                position: "relative",
-                touchAction: "none",
-                cursor: isPanningRef.current ? "grabbing" : "grab",
-                userSelect: "none",
-              }}
-            >
-
+            onWheel={onWheelZoom}
+            onMouseDown={onPanStart}
+            onMouseMove={onPanMove}
+            onMouseUp={onPanEnd}
+            onMouseLeave={onPanEnd}
+            style={{
+              marginTop: 10,
+              borderRadius: 12,
+              border: "1px solid rgba(243,231,207,0.12)",
+              overflow: "hidden",
+              background: "rgba(0,0,0,0.15)",
+              height: 640,
+              position: "relative",
+              touchAction: "none",
+              cursor: isPanningRef.current ? "grabbing" : "grab",
+              userSelect: "none",
+            }}
+          >
             <div
               style={{
                 transform: `translate(${mapPan.x}px, ${mapPan.y}px) scale(${mapZoom})`,
@@ -1822,206 +1835,34 @@ return (
               />
             </div>
           </div>
-
-        
-
-
-        {/* Legend (moved under map) */}
-          <div style={ui.card}>
-            <div style={ui.cardTitle}>Legend</div>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              {players.map((p) => {
-                const bg = colorForPlayer(p.id);
-                return (
-                  <div key={p.id} style={ui.legendPill}>
-                    <span style={{ ...ui.legendSwatch, background: bg }} />
-                    <span style={{ fontSize: 13 }}>
-                      {p.avatar} {p.name}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          </div>
-
-        {/* Logs under map (left-bottom) */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          {/* Bank log */}
-          <div style={ui.card}>
-            <div style={ui.cardTitle}>🏦 Bank transactions (last 20)</div>
-
-            {bankLog.length === 0 ? (
-              <div style={{ opacity: 0.75 }}>No bank transactions yet.</div>
-            ) : (
-              <ol style={{ margin: 0, paddingLeft: 18 }}>
-                {bankLog.map((e) => {
-                  const who = nameFor(e.playerId);
-                  const type = String((e as any).type ?? "");
-
-                  // EXP ADJUST: toon exp i.p.v. credits
-                  if (type === "EXP_ADJUST") {
-                    const unitType = String((e as any).unitType ?? "");
-                    const icon =
-                      unitType === "foot" ? "🗡️" : unitType === "cav" ? "🐎" : unitType === "arch" ? "🏹" : "⭐";
-
-                    const delta = Number((e as any).delta ?? 0);
-                    const from = Number((e as any).from ?? 0);
-                    const to = Number((e as any).to ?? 0);
-
-                    return (
-                      <li key={(e as any).id} style={{ marginBottom: 6 }}>
-                        <strong>{who}</strong>: EXP {icon} {delta > 0 ? "+" : ""}
-                        {delta} ({from} → {to})
-                      </li>
-                    );
-                  }
-
-                  const delta = Number(e.delta ?? 0);
-                  const from = Number(e.from ?? 0);
-                  const to = Number(e.to ?? 0);
-                  const sign = delta > 0 ? "+" : "";
-                  const action = delta > 0 ? "added" : "removed";
-
-                  return (
-                    <li key={e.id} style={{ marginBottom: 6 }}>
-                      <strong>{who}</strong> {action} {sign}
-                      {delta} credits ({from} → {to})
-                    </li>
-                  );
-                })}
-              </ol>
-            )}
-          </div>
-
-          {/* Tile log */}
-          <div style={ui.card}>
-            <div style={ui.cardTitle}>📜 Last 10 tile changes</div>
-
-            {battleLog.length === 0 ? (
-              <div style={{ opacity: 0.75 }}>No events yet.</div>
-            ) : (
-              <ol style={{ margin: 0, paddingLeft: 18 }}>
-                {battleLog.map((e) => {
-                  let text = "";
-
-                  if (e.type === "CONQUER") {
-                    text = `Tile #${e.tileId}: ${nameFor(e.newOwnerId)} conquered neutral land`;
-                  } else if (e.type === "RELEASE") {
-                    text = `Tile #${e.tileId}: ${nameFor(e.oldOwnerId)} left it empty → neutral`;
-                  } else if (e.type === "ATTACKER_WIN") {
-                    const ap = Number(e.attackerPower ?? 0);
-                    const dp = Number(e.defenderPower ?? 0);
-                    const df = Number(e.diff ?? ap - dp);
-                    text = `Tile #${e.tileId}: ${nameFor(e.attackerId)} conquered from ${nameFor(
-                      e.defenderId
-                    )} (score ${ap.toFixed(2)} vs ${dp.toFixed(2)}, diff ${df.toFixed(2)})`;
-                  } else if (e.type === "DEFENDER_HOLD") {
-                    const ap = Number(e.attackerPower ?? 0);
-                    const dp = Number(e.defenderPower ?? 0);
-                    const df = Number(e.diff ?? ap - dp);
-                    text = `Tile #${e.tileId}: ${nameFor(e.defenderId)} held vs ${nameFor(
-                      e.attackerId
-                    )} (score ${ap.toFixed(2)} vs ${dp.toFixed(2)}, diff ${df.toFixed(2)})`;
-                  } else if (e.type === "DRAW") {
-                    const ap = Number(e.attackerPower ?? 0);
-                    const dp = Number(e.defenderPower ?? 0);
-                    const df = Number(e.diff ?? ap - dp);
-                    text = `Tile #${e.tileId}: draw (${nameFor(e.attackerId)} vs ${nameFor(
-                      e.defenderId
-                    )}) (score ${ap.toFixed(2)} vs ${dp.toFixed(2)}, diff ${df.toFixed(2)}) → neutral`;
-                  } else if (e.type === "BAMBOOZLE_DESTROY_TROOPS") {
-                    const k = e.kill ?? {};
-                    text = `🎴 Troops destroyed on tile #${e.tileId} of ${nameFor(e.victimId)} (🗡️${k.foot ?? 0} 🐎${
-                      k.cav ?? 0
-                    } 🏹${k.arch ?? 0})`;
-                  } else if (e.type === "BAMBOOZLE_TAKEOVER_TILE") {
-                    const tileId = String(e.tileId ?? "");
-                    const actor = nameFor(e.actorId);
-                    const oldOwner = nameFor(e.oldOwnerId);
-                    const mageKilled = !!e.defenderMageDestroyed;
-                    text = `🎴 Tile #${tileId}: ${actor} took over from ${oldOwner} (+1 🐎 cav, enemy troops wiped${
-                      mageKilled ? ", mage destroyed" : ""
-                    })`;
-                  } else if (e.type === "FROST_GIANTS_ATTACK") {
-                    const ids = Array.isArray((e as any).attackedTileIds) ? (e as any).attackedTileIds : [];
-                    const results = Array.isArray((e as any).results) ? (e as any).results : [];
-
-                    const dgUsed = results.filter((r: any) => r?.dragonglassConsumed).length;
-                    const hitOwned = results.filter((r: any) => r?.ownerId).length;
-
-                    text =
-                      `❄️ Frost Giants attacked ${ids.length || hitOwned} tiles` +
-                      (dgUsed ? ` — 🧪 Dragonglass used: ${dgUsed}` : "") +
-                      (ids.length ? `: ${ids.map((id: any) => `#${id}`).join(", ")}` : "");
-                  } else {
-                    text = `Event on tile #${(e as any).tileId ?? "?"}`;
-                  }
-
-                  return <li key={e.id} style={{ marginBottom: 6 }}>{text}</li>;
-                })}
-              </ol>
-            )}
-          </div>
         </div>
-      </div>
 
-      {/* ================= RIGHT: Controls + Ranking + Bamboozle ================= */}
-      <div style={{ display: "grid", gap: 14 }}>
-        {/* Ranking */}
+        {/* Legend (under map) */}
         <div style={ui.card}>
-          <div style={ui.cardTitle}>🏆 Ranking ({players.length})</div>
-
-          {rankedPlayers.length === 0 ? (
-            <div style={{ opacity: 0.75 }}>No players yet.</div>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
-                <thead>
-                  <tr>
-                    <th style={ui.thLeft}>#</th>
-                    <th style={ui.thLeft}>Player</th>
-                    <th style={ui.thRight}>Dominance</th>
-                    <th style={ui.thRight}>Credits</th>
-                    <th style={ui.thRight}>🐎</th>
-                    <th style={ui.thRight}>🏹</th>
-                    <th style={ui.thRight}>🗡️</th>
-                    <th style={ui.thRight}>🍺</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rankedPlayers.map((p, idx) => (
-                    <tr key={p.id}>
-                      <td style={ui.tdLeft}>{idx + 1}</td>
-                      <td style={ui.tdLeft}>
-                        <strong>
-                          {p.avatar} {p.name}
-                        </strong>
-                      </td>
-                      <td style={ui.tdRight}>{p.dominance.toFixed(1)}%</td>
-                      <td style={ui.tdRight}>{Number(p.credits ?? 0)}</td>
-                      <td style={ui.tdRight}>{Number(p.u?.cav ?? 0)}</td>
-                      <td style={ui.tdRight}>{Number(p.u?.arch ?? 0)}</td>
-                      <td style={ui.tdRight}>{Number(p.u?.foot ?? 0)}</td>
-                      <td style={ui.tdRight}>{Number((p as any).beerCount ?? 0)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <div style={ui.cardTitle}>Legend</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {players.map((p) => {
+              const bg = colorForPlayer(p.id);
+              return (
+                <div key={p.id} style={ui.legendPill}>
+                  <span style={{ ...ui.legendSwatch, background: bg }} />
+                  <span style={{ fontSize: 13 }}>
+                    {p.avatar} {p.name}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </div>
+
+        {/* ===== Bamboozle cards moved under Legend (LEFT column) ===== */}
 
         {/* Bamboozle — Destroy Troops */}
         <div style={ui.card}>
           <div style={ui.cardTitle}>🎴 Bamboozle — Destroy Troops</div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <select
-              value={bbVictimPlayerId}
-              onChange={(e) => setBbVictimPlayerId(e.target.value)}
-              style={ui.select}
-            >
+            <select value={bbVictimPlayerId} onChange={(e) => setBbVictimPlayerId(e.target.value)} style={ui.select}>
               <option value="">— choose player —</option>
               {players.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -2159,7 +2000,7 @@ return (
           </div>
         </div>
 
-        {/* ✅ Combined card: Destroy Mage OR Dragonglass (independent) */}
+        {/* Combined card: Destroy Mage OR Dragonglass (independent) */}
         <div style={ui.card}>
           <div style={ui.cardTitle}>🎴 Bamboozle — Destroy Mage or Dragonglass</div>
 
@@ -2205,11 +2046,7 @@ return (
             <div style={ui.subBox}>
               <div style={ui.subBoxTitle}>🔷 Destroy Dragonglass</div>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <select
-                  value={dgTargetPlayerId}
-                  onChange={(e) => setDgTargetPlayerId(e.target.value)}
-                  style={ui.selectFull}
-                >
+                <select value={dgTargetPlayerId} onChange={(e) => setDgTargetPlayerId(e.target.value)} style={ui.selectFull}>
                   <option value="">— choose player —</option>
                   {players
                     .filter((p) => !!(p as any).hasDragonglass)
@@ -2237,12 +2074,177 @@ return (
             </div>
           </div>
         </div>
+      </div>
 
-        
+      {/* ================= RIGHT: Ranking + Bank + Tile log ================= */}
+      <div style={{ display: "grid", gap: 14 }}>
+        {/* Ranking */}
+        <div style={ui.card}>
+          <div style={ui.cardTitle}>🏆 Ranking ({players.length})</div>
+
+          {rankedPlayers.length === 0 ? (
+            <div style={{ opacity: 0.75 }}>No players yet.</div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
+                <thead>
+                  <tr>
+                    <th style={ui.thLeft}>#</th>
+                    <th style={ui.thLeft}>Player</th>
+                    <th style={ui.thRight}>Dominance</th>
+                    <th style={ui.thRight}>Credits</th>
+                    <th style={ui.thRight}>🐎</th>
+                    <th style={ui.thRight}>🏹</th>
+                    <th style={ui.thRight}>🗡️</th>
+                    <th style={ui.thRight}>🍺</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rankedPlayers.map((p, idx) => (
+                    <tr key={p.id}>
+                      <td style={ui.tdLeft}>{idx + 1}</td>
+                      <td style={ui.tdLeft}>
+                        <strong>
+                          {p.avatar} {p.name}
+                        </strong>
+                      </td>
+                      <td style={ui.tdRight}>{p.dominance.toFixed(1)}%</td>
+                      <td style={ui.tdRight}>{Number(p.credits ?? 0)}</td>
+                      <td style={ui.tdRight}>{Number(p.u?.cav ?? 0)}</td>
+                      <td style={ui.tdRight}>{Number(p.u?.arch ?? 0)}</td>
+                      <td style={ui.tdRight}>{Number(p.u?.foot ?? 0)}</td>
+                      <td style={ui.tdRight}>{Number((p as any).beerCount ?? 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Bank log (moved under ranking) */}
+        <div style={ui.card}>
+          <div style={ui.cardTitle}>🏦 Bank transactions (last 20)</div>
+
+          {bankLog.length === 0 ? (
+            <div style={{ opacity: 0.75 }}>No bank transactions yet.</div>
+          ) : (
+            <ol style={{ margin: 0, paddingLeft: 18 }}>
+              {bankLog.map((e) => {
+                const who = nameFor(e.playerId);
+                const type = String((e as any).type ?? "");
+
+                if (type === "EXP_ADJUST") {
+                  const unitType = String((e as any).unitType ?? "");
+                  const icon =
+                    unitType === "foot" ? "🗡️" : unitType === "cav" ? "🐎" : unitType === "arch" ? "🏹" : "⭐";
+
+                  const delta = Number((e as any).delta ?? 0);
+                  const from = Number((e as any).from ?? 0);
+                  const to = Number((e as any).to ?? 0);
+
+                  return (
+                    <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                      <strong>{who}</strong>: EXP {icon} {delta > 0 ? "+" : ""}
+                      {delta} ({from} → {to})
+                    </li>
+                  );
+                }
+
+                const delta = Number(e.delta ?? 0);
+                const from = Number(e.from ?? 0);
+                const to = Number(e.to ?? 0);
+                const sign = delta > 0 ? "+" : "";
+                const action = delta > 0 ? "added" : "removed";
+
+                return (
+                  <li key={e.id} style={{ marginBottom: 6 }}>
+                    <strong>{who}</strong> {action} {sign}
+                    {delta} credits ({from} → {to})
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </div>
+
+        {/* Tile log (moved under ranking) */}
+        <div style={ui.card}>
+          <div style={ui.cardTitle}>📜 Last 10 tile changes</div>
+
+          {battleLog.length === 0 ? (
+            <div style={{ opacity: 0.75 }}>No events yet.</div>
+          ) : (
+            <ol style={{ margin: 0, paddingLeft: 18 }}>
+              {battleLog.map((e) => {
+                let text = "";
+
+                if (e.type === "CONQUER") {
+                  text = `Tile #${e.tileId}: ${nameFor(e.newOwnerId)} conquered neutral land`;
+                } else if (e.type === "RELEASE") {
+                  text = `Tile #${e.tileId}: ${nameFor(e.oldOwnerId)} left it empty → neutral`;
+                } else if (e.type === "ATTACKER_WIN") {
+                  const ap = Number(e.attackerPower ?? 0);
+                  const dp = Number(e.defenderPower ?? 0);
+                  const df = Number(e.diff ?? ap - dp);
+                  text = `Tile #${e.tileId}: ${nameFor(e.attackerId)} conquered from ${nameFor(
+                    e.defenderId
+                  )} (score ${ap.toFixed(2)} vs ${dp.toFixed(2)}, diff ${df.toFixed(2)})`;
+                } else if (e.type === "DEFENDER_HOLD") {
+                  const ap = Number(e.attackerPower ?? 0);
+                  const dp = Number(e.defenderPower ?? 0);
+                  const df = Number(e.diff ?? ap - dp);
+                  text = `Tile #${e.tileId}: ${nameFor(e.defenderId)} held vs ${nameFor(
+                    e.attackerId
+                  )} (score ${ap.toFixed(2)} vs ${dp.toFixed(2)}, diff ${df.toFixed(2)})`;
+                } else if (e.type === "DRAW") {
+                  const ap = Number(e.attackerPower ?? 0);
+                  const dp = Number(e.defenderPower ?? 0);
+                  const df = Number(e.diff ?? ap - dp);
+                  text = `Tile #${e.tileId}: draw (${nameFor(e.attackerId)} vs ${nameFor(
+                    e.defenderId
+                  )}) (score ${ap.toFixed(2)} vs ${dp.toFixed(2)}, diff ${df.toFixed(2)}) → neutral`;
+                } else if (e.type === "BAMBOOZLE_DESTROY_TROOPS") {
+                  const k = e.kill ?? {};
+                  text = `🎴 Troops destroyed on tile #${e.tileId} of ${nameFor(e.victimId)} (🗡️${k.foot ?? 0} 🐎${
+                    k.cav ?? 0
+                  } 🏹${k.arch ?? 0})`;
+                } else if (e.type === "BAMBOOZLE_TAKEOVER_TILE") {
+                  const tileId = String(e.tileId ?? "");
+                  const actor = nameFor(e.actorId);
+                  const oldOwner = nameFor(e.oldOwnerId);
+                  const mageKilled = !!e.defenderMageDestroyed;
+                  text = `🎴 Tile #${tileId}: ${actor} took over from ${oldOwner} (+1 🐎 cav, enemy troops wiped${
+                    mageKilled ? ", mage destroyed" : ""
+                  })`;
+                } else if (e.type === "FROST_GIANTS_ATTACK") {
+                  const ids = Array.isArray((e as any).attackedTileIds) ? (e as any).attackedTileIds : [];
+                  const results = Array.isArray((e as any).results) ? (e as any).results : [];
+
+                  const dgUsed = results.filter((r: any) => r?.dragonglassConsumed).length;
+                  const hitOwned = results.filter((r: any) => r?.ownerId).length;
+
+                  text =
+                    `❄️ Frost Giants attacked ${ids.length || hitOwned} tiles` +
+                    (dgUsed ? ` — 🧪 Dragonglass used: ${dgUsed}` : "") +
+                    (ids.length ? `: ${ids.map((id: any) => `#${id}`).join(", ")}` : "");
+                } else {
+                  text = `Event on tile #${(e as any).tileId ?? "?"}`;
+                }
+
+                return (
+                  <li key={e.id} style={{ marginBottom: 6 }}>
+                    {text}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </div>
       </div>
     </div>
 
-    {/* ===== Bottom: Host controls (moved down) + Pregame under it ===== */}
+    {/* ===== Bottom: Host controls (unchanged) + Pregame under it ===== */}
     <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
       {/* Host controls */}
       <div style={ui.card}>
@@ -2424,4 +2426,5 @@ return (
     </div>
   </main>
 );
+
 }
