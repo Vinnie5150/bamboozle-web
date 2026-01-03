@@ -2076,173 +2076,180 @@ return (
         </div>
       </div>
 
-      {/* ================= RIGHT: Ranking + Bank + Tile log ================= */}
-      <div style={{ display: "grid", gap: 14 }}>
-        {/* Ranking */}
-        <div style={ui.card}>
-          <div style={ui.cardTitle}>🏆 Ranking ({players.length})</div>
+      {/* ================= RIGHT: Bank + Tile log + Ranking ================= */}
+<div style={{ display: "grid", gap: 14 }}>
+  {/* Bank log */}
+  <div style={ui.card}>
+    <div style={ui.cardTitle}>🏦 Bank transactions (last 20)</div>
 
-          {rankedPlayers.length === 0 ? (
-            <div style={{ opacity: 0.75 }}>No players yet.</div>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
-                <thead>
-                  <tr>
-                    <th style={ui.thLeft}>#</th>
-                    <th style={ui.thLeft}>Player</th>
-                    <th style={ui.thRight}>Dominance</th>
-                    <th style={ui.thRight}>Credits</th>
-                    <th style={ui.thRight}>🐎</th>
-                    <th style={ui.thRight}>🏹</th>
-                    <th style={ui.thRight}>🗡️</th>
-                    <th style={ui.thRight}>🍺</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rankedPlayers.map((p, idx) => (
-                    <tr key={p.id}>
-                      <td style={ui.tdLeft}>{idx + 1}</td>
-                      <td style={ui.tdLeft}>
-                        <strong>
-                          {p.avatar} {p.name}
-                        </strong>
-                      </td>
-                      <td style={ui.tdRight}>{p.dominance.toFixed(1)}%</td>
-                      <td style={ui.tdRight}>{Number(p.credits ?? 0)}</td>
-                      <td style={ui.tdRight}>{Number(p.u?.cav ?? 0)}</td>
-                      <td style={ui.tdRight}>{Number(p.u?.arch ?? 0)}</td>
-                      <td style={ui.tdRight}>{Number(p.u?.foot ?? 0)}</td>
-                      <td style={ui.tdRight}>{Number((p as any).beerCount ?? 0)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+    {bankLog.length === 0 ? (
+      <div style={{ opacity: 0.75 }}>No bank transactions yet.</div>
+    ) : (
+      <ol style={{ margin: 0, paddingLeft: 18 }}>
+        {bankLog.map((e) => {
+          const who = nameFor(e.playerId);
+          const type = String((e as any).type ?? "");
 
-        {/* Bank log (moved under ranking) */}
-        <div style={ui.card}>
-          <div style={ui.cardTitle}>🏦 Bank transactions (last 20)</div>
+          // EXP ADJUST: toon exp i.p.v. credits
+          if (type === "EXP_ADJUST") {
+            const unitType = String((e as any).unitType ?? "");
+            const icon =
+              unitType === "foot"
+                ? "🗡️"
+                : unitType === "cav"
+                ? "🐎"
+                : unitType === "arch"
+                ? "🏹"
+                : "⭐";
 
-          {bankLog.length === 0 ? (
-            <div style={{ opacity: 0.75 }}>No bank transactions yet.</div>
-          ) : (
-            <ol style={{ margin: 0, paddingLeft: 18 }}>
-              {bankLog.map((e) => {
-                const who = nameFor(e.playerId);
-                const type = String((e as any).type ?? "");
+            const delta = Number((e as any).delta ?? 0);
+            const from = Number((e as any).from ?? 0);
+            const to = Number((e as any).to ?? 0);
 
-                if (type === "EXP_ADJUST") {
-                  const unitType = String((e as any).unitType ?? "");
-                  const icon =
-                    unitType === "foot" ? "🗡️" : unitType === "cav" ? "🐎" : unitType === "arch" ? "🏹" : "⭐";
+            return (
+              <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                <strong>{who}</strong>: EXP {icon} {delta > 0 ? "+" : ""}
+                {delta} ({from} → {to})
+              </li>
+            );
+          }
 
-                  const delta = Number((e as any).delta ?? 0);
-                  const from = Number((e as any).from ?? 0);
-                  const to = Number((e as any).to ?? 0);
+          const delta = Number(e.delta ?? 0);
+          const from = Number(e.from ?? 0);
+          const to = Number(e.to ?? 0);
+          const sign = delta > 0 ? "+" : "";
+          const action = delta > 0 ? "added" : "removed";
 
-                  return (
-                    <li key={(e as any).id} style={{ marginBottom: 6 }}>
-                      <strong>{who}</strong>: EXP {icon} {delta > 0 ? "+" : ""}
-                      {delta} ({from} → {to})
-                    </li>
-                  );
-                }
+          return (
+            <li key={e.id} style={{ marginBottom: 6 }}>
+              <strong>{who}</strong> {action} {sign}
+              {delta} credits ({from} → {to})
+            </li>
+          );
+        })}
+      </ol>
+    )}
+  </div>
 
-                const delta = Number(e.delta ?? 0);
-                const from = Number(e.from ?? 0);
-                const to = Number(e.to ?? 0);
-                const sign = delta > 0 ? "+" : "";
-                const action = delta > 0 ? "added" : "removed";
+  {/* Tile log */}
+  <div style={ui.card}>
+    <div style={ui.cardTitle}>📜 Last 10 tile changes</div>
 
-                return (
-                  <li key={e.id} style={{ marginBottom: 6 }}>
-                    <strong>{who}</strong> {action} {sign}
-                    {delta} credits ({from} → {to})
-                  </li>
-                );
-              })}
-            </ol>
-          )}
-        </div>
+    {battleLog.length === 0 ? (
+      <div style={{ opacity: 0.75 }}>No events yet.</div>
+    ) : (
+      <ol style={{ margin: 0, paddingLeft: 18 }}>
+        {battleLog.map((e) => {
+          let text = "";
 
-        {/* Tile log (moved under ranking) */}
-        <div style={ui.card}>
-          <div style={ui.cardTitle}>📜 Last 10 tile changes</div>
+          if (e.type === "CONQUER") {
+            text = `Tile #${e.tileId}: ${nameFor(e.newOwnerId)} conquered neutral land`;
+          } else if (e.type === "RELEASE") {
+            text = `Tile #${e.tileId}: ${nameFor(e.oldOwnerId)} left it empty → neutral`;
+          } else if (e.type === "ATTACKER_WIN") {
+            const ap = Number(e.attackerPower ?? 0);
+            const dp = Number(e.defenderPower ?? 0);
+            const df = Number(e.diff ?? ap - dp);
+            text = `Tile #${e.tileId}: ${nameFor(e.attackerId)} conquered from ${nameFor(
+              e.defenderId
+            )} (score ${ap.toFixed(2)} vs ${dp.toFixed(2)}, diff ${df.toFixed(2)})`;
+          } else if (e.type === "DEFENDER_HOLD") {
+            const ap = Number(e.attackerPower ?? 0);
+            const dp = Number(e.defenderPower ?? 0);
+            const df = Number(e.diff ?? ap - dp);
+            text = `Tile #${e.tileId}: ${nameFor(e.defenderId)} held vs ${nameFor(
+              e.attackerId
+            )} (score ${ap.toFixed(2)} vs ${dp.toFixed(2)}, diff ${df.toFixed(2)})`;
+          } else if (e.type === "DRAW") {
+            const ap = Number(e.attackerPower ?? 0);
+            const dp = Number(e.defenderPower ?? 0);
+            const df = Number(e.diff ?? ap - dp);
+            text = `Tile #${e.tileId}: draw (${nameFor(e.attackerId)} vs ${nameFor(
+              e.defenderId
+            )}) (score ${ap.toFixed(2)} vs ${dp.toFixed(2)}, diff ${df.toFixed(2)}) → neutral`;
+          } else if (e.type === "BAMBOOZLE_DESTROY_TROOPS") {
+            const k = e.kill ?? {};
+            text = `🎴 Troops destroyed on tile #${e.tileId} of ${nameFor(e.victimId)} (🗡️${k.foot ?? 0} 🐎${
+              k.cav ?? 0
+            } 🏹${k.arch ?? 0})`;
+          } else if (e.type === "BAMBOOZLE_TAKEOVER_TILE") {
+            const tileId = String(e.tileId ?? "");
+            const actor = nameFor(e.actorId);
+            const oldOwner = nameFor(e.oldOwnerId);
+            const mageKilled = !!e.defenderMageDestroyed;
+            text = `🎴 Tile #${tileId}: ${actor} took over from ${oldOwner} (+1 🐎 cav, enemy troops wiped${
+              mageKilled ? ", mage destroyed" : ""
+            })`;
+          } else if (e.type === "FROST_GIANTS_ATTACK") {
+            const ids = Array.isArray((e as any).attackedTileIds) ? (e as any).attackedTileIds : [];
+            const results = Array.isArray((e as any).results) ? (e as any).results : [];
 
-          {battleLog.length === 0 ? (
-            <div style={{ opacity: 0.75 }}>No events yet.</div>
-          ) : (
-            <ol style={{ margin: 0, paddingLeft: 18 }}>
-              {battleLog.map((e) => {
-                let text = "";
+            const dgUsed = results.filter((r: any) => r?.dragonglassConsumed).length;
+            const hitOwned = results.filter((r: any) => r?.ownerId).length;
 
-                if (e.type === "CONQUER") {
-                  text = `Tile #${e.tileId}: ${nameFor(e.newOwnerId)} conquered neutral land`;
-                } else if (e.type === "RELEASE") {
-                  text = `Tile #${e.tileId}: ${nameFor(e.oldOwnerId)} left it empty → neutral`;
-                } else if (e.type === "ATTACKER_WIN") {
-                  const ap = Number(e.attackerPower ?? 0);
-                  const dp = Number(e.defenderPower ?? 0);
-                  const df = Number(e.diff ?? ap - dp);
-                  text = `Tile #${e.tileId}: ${nameFor(e.attackerId)} conquered from ${nameFor(
-                    e.defenderId
-                  )} (score ${ap.toFixed(2)} vs ${dp.toFixed(2)}, diff ${df.toFixed(2)})`;
-                } else if (e.type === "DEFENDER_HOLD") {
-                  const ap = Number(e.attackerPower ?? 0);
-                  const dp = Number(e.defenderPower ?? 0);
-                  const df = Number(e.diff ?? ap - dp);
-                  text = `Tile #${e.tileId}: ${nameFor(e.defenderId)} held vs ${nameFor(
-                    e.attackerId
-                  )} (score ${ap.toFixed(2)} vs ${dp.toFixed(2)}, diff ${df.toFixed(2)})`;
-                } else if (e.type === "DRAW") {
-                  const ap = Number(e.attackerPower ?? 0);
-                  const dp = Number(e.defenderPower ?? 0);
-                  const df = Number(e.diff ?? ap - dp);
-                  text = `Tile #${e.tileId}: draw (${nameFor(e.attackerId)} vs ${nameFor(
-                    e.defenderId
-                  )}) (score ${ap.toFixed(2)} vs ${dp.toFixed(2)}, diff ${df.toFixed(2)}) → neutral`;
-                } else if (e.type === "BAMBOOZLE_DESTROY_TROOPS") {
-                  const k = e.kill ?? {};
-                  text = `🎴 Troops destroyed on tile #${e.tileId} of ${nameFor(e.victimId)} (🗡️${k.foot ?? 0} 🐎${
-                    k.cav ?? 0
-                  } 🏹${k.arch ?? 0})`;
-                } else if (e.type === "BAMBOOZLE_TAKEOVER_TILE") {
-                  const tileId = String(e.tileId ?? "");
-                  const actor = nameFor(e.actorId);
-                  const oldOwner = nameFor(e.oldOwnerId);
-                  const mageKilled = !!e.defenderMageDestroyed;
-                  text = `🎴 Tile #${tileId}: ${actor} took over from ${oldOwner} (+1 🐎 cav, enemy troops wiped${
-                    mageKilled ? ", mage destroyed" : ""
-                  })`;
-                } else if (e.type === "FROST_GIANTS_ATTACK") {
-                  const ids = Array.isArray((e as any).attackedTileIds) ? (e as any).attackedTileIds : [];
-                  const results = Array.isArray((e as any).results) ? (e as any).results : [];
+            text =
+              `❄️ Frost Giants attacked ${ids.length || hitOwned} tiles` +
+              (dgUsed ? ` — 🧪 Dragonglass used: ${dgUsed}` : "") +
+              (ids.length ? `: ${ids.map((id: any) => `#${id}`).join(", ")}` : "");
+          } else {
+            text = `Event on tile #${(e as any).tileId ?? "?"}`;
+          }
 
-                  const dgUsed = results.filter((r: any) => r?.dragonglassConsumed).length;
-                  const hitOwned = results.filter((r: any) => r?.ownerId).length;
+          return (
+            <li key={e.id} style={{ marginBottom: 6 }}>
+              {text}
+            </li>
+          );
+        })}
+      </ol>
+    )}
+  </div>
 
-                  text =
-                    `❄️ Frost Giants attacked ${ids.length || hitOwned} tiles` +
-                    (dgUsed ? ` — 🧪 Dragonglass used: ${dgUsed}` : "") +
-                    (ids.length ? `: ${ids.map((id: any) => `#${id}`).join(", ")}` : "");
-                } else {
-                  text = `Event on tile #${(e as any).tileId ?? "?"}`;
-                }
+  {/* Ranking (moved under logs) */}
+  <div style={ui.card}>
+    <div style={ui.cardTitle}>🏆 Ranking ({players.length})</div>
 
-                return (
-                  <li key={e.id} style={{ marginBottom: 6 }}>
-                    {text}
-                  </li>
-                );
-              })}
-            </ol>
-          )}
-        </div>
+    {rankedPlayers.length === 0 ? (
+      <div style={{ opacity: 0.75 }}>No players yet.</div>
+    ) : (
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
+          <thead>
+            <tr>
+              <th style={ui.thLeft}>#</th>
+              <th style={ui.thLeft}>Player</th>
+              <th style={ui.thRight}>Dominance</th>
+              <th style={ui.thRight}>Credits</th>
+              <th style={ui.thRight}>🐎</th>
+              <th style={ui.thRight}>🏹</th>
+              <th style={ui.thRight}>🗡️</th>
+              <th style={ui.thRight}>🍺</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rankedPlayers.map((p, idx) => (
+              <tr key={p.id}>
+                <td style={ui.tdLeft}>{idx + 1}</td>
+                <td style={ui.tdLeft}>
+                  <strong>
+                    {p.avatar} {p.name}
+                  </strong>
+                </td>
+                <td style={ui.tdRight}>{p.dominance.toFixed(1)}%</td>
+                <td style={ui.tdRight}>{Number(p.credits ?? 0)}</td>
+                <td style={ui.tdRight}>{Number(p.u?.cav ?? 0)}</td>
+                <td style={ui.tdRight}>{Number(p.u?.arch ?? 0)}</td>
+                <td style={ui.tdRight}>{Number(p.u?.foot ?? 0)}</td>
+                <td style={ui.tdRight}>{Number((p as any).beerCount ?? 0)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-    </div>
+    )}
+  </div>
+</div>
+
 
     {/* ===== Bottom: Host controls (unchanged) + Pregame under it ===== */}
     <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
