@@ -2145,6 +2145,42 @@ return (
               </li>
             );
           }
+                    // ✅ Dragonglass / Mage logs
+          if (type === "DRAGONGLASS_PURCHASE") {
+            const cost = Number((e as any).cost ?? 0);
+            return (
+              <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                <strong>{who}</strong> bought 🔷 Dragonglass (-{cost} credits)
+              </li>
+            );
+          }
+
+          if (type === "DRAGONGLASS_FREE") {
+            return (
+              <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                <strong>{who}</strong> received 🔷 Dragonglass for FREE (🎴 Bamboozle)
+              </li>
+            );
+          }
+
+          if (type === "MAGE_PURCHASE") {
+            const cost = Number((e as any).cost ?? 0);
+            const tileId = String((e as any).tileId ?? "");
+            return (
+              <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                <strong>{who}</strong> bought 🧙 Mage on tile #{tileId} (-{cost} credits)
+              </li>
+            );
+          }
+
+          if (type === "MAGE_FREE") {
+            const tileId = String((e as any).tileId ?? "");
+            return (
+              <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                <strong>{who}</strong> received 🧙 Mage for FREE on tile #{tileId} (🎴 Bamboozle)
+              </li>
+            );
+          }
 
           const delta = Number(e.delta ?? 0);
           const from = Number(e.from ?? 0);

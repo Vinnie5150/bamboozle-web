@@ -1418,8 +1418,24 @@ async function moveTroops() {
         credits: credits - cost,
         hasDragonglass: true,
       });
+      // ✅ log: dragonglass purchase
+      const logRef = doc(collection(db, "games", gameId, "bankLog"));
+      tx.set(
+        logRef,
+        {
+          createdAt: serverTimestamp(),
+          type: "DRAGONGLASS_PURCHASE",
+          playerId,
+          cost,
+          from: credits,
+          to: credits - cost,
+          delta: -cost,
+        },
+        { merge: true }
+      );
     });
 
+         
     setStatus(`✅ Dragonglass purchased (cost ${cost}).`);
   } catch (err: any) {
     console.error(err);
@@ -1444,6 +1460,20 @@ async function moveTroops() {
       // ✅ free grant (no credits change)
       tx.update(playerRef, { hasDragonglass: true });
     });
+
+          // ✅ log: dragonglass free (bamboozle)
+      const logRef = doc(collection(db, "games", gameId, "bankLog"));
+      tx.set(
+        logRef,
+        {
+          createdAt: serverTimestamp(),
+          type: "DRAGONGLASS_FREE",
+          playerId,
+          note: "Bamboozle",
+        },
+        { merge: true }
+      );
+
 
     setStatus("🪨✅ Dragonglass granted for FREE (Bamboozle).");
   } catch (err: any) {
@@ -1525,8 +1555,25 @@ async function moveTroops() {
         },
         { merge: true }
       );
+       // ✅ log: mage purchase
+      const logRef = doc(collection(db, "games", gameId, "bankLog"));
+      tx.set(
+        logRef,
+        {
+          createdAt: serverTimestamp(),
+          type: "MAGE_PURCHASE",
+          playerId,
+          cost,
+          tileId: magePlaceTileId,
+          from: credits,
+          to: credits - cost,
+          delta: -cost,
+        },
+        { merge: true }
+      );
     });
 
+          
     const placed = magePlaceTileId;
     setMagePlaceTileId("");
     setStatus(`✅ Mage purchased & placed on tile #${placed}.`);
@@ -1590,6 +1637,20 @@ async function moveTroops() {
         },
         { merge: true }
       );
+            // ✅ log: mage free (bamboozle)
+      const logRef = doc(collection(db, "games", gameId, "bankLog"));
+      tx.set(
+        logRef,
+        {
+          createdAt: serverTimestamp(),
+          type: "MAGE_FREE",
+          playerId,
+          tileId: magePlaceTileId,
+          note: "Bamboozle",
+        },
+        { merge: true }
+      );
+
     });
 
     const placed = magePlaceTileId;
