@@ -1442,7 +1442,7 @@ async function moveTroops() {
     setStatus(`❌ ${err?.message ?? String(err)}`);
   }
 }
-    async function grantDragonglassFree() {
+   async function grantDragonglassFree() {
   setStatus("");
 
   const playerRef = doc(db, "games", gameId, "players", playerId);
@@ -1459,9 +1459,8 @@ async function moveTroops() {
 
       // ✅ free grant (no credits change)
       tx.update(playerRef, { hasDragonglass: true });
-    });
 
-          // ✅ log: dragonglass free (bamboozle)
+      // ✅ log: dragonglass free (bamboozle)
       const logRef = doc(collection(db, "games", gameId, "bankLog"));
       tx.set(
         logRef,
@@ -1473,7 +1472,7 @@ async function moveTroops() {
         },
         { merge: true }
       );
-
+    });
 
     setStatus("🪨✅ Dragonglass granted for FREE (Bamboozle).");
   } catch (err: any) {
@@ -1481,6 +1480,7 @@ async function moveTroops() {
     setStatus(`❌ ${err?.message ?? String(err)}`);
   }
 }
+
 
     async function buyAndPlaceMage() {
   setStatus("");
