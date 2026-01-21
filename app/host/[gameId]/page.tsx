@@ -1139,12 +1139,16 @@ async function bamboozleDestroyMage(victimPlayerId: string) {
   if (!ok) return;
 
   const mageRef = doc(db, "games", gameId, "mages", victimPlayerId);
+  const victimPlayerRef = doc(db, "games", gameId, "players", victimPlayerId);
   const logRef = doc(collection(db, "games", gameId, "battleLog"));
 
   const batch = writeBatch(db);
 
   // mage verwijderen
   batch.delete(mageRef);
+
+  // ✅ belangrijk: speler terug "geen mage" geven zodat hij opnieuw kan kopen/gratis krijgen
+  batch.update(victimPlayerRef, { hasMage: false });
 
   // (optioneel) log zodat iedereen het ziet
   batch.set(
@@ -1161,6 +1165,7 @@ async function bamboozleDestroyMage(victimPlayerId: string) {
 
   alert(`🧙‍♂️ Mage destroyed for ${nameFor(victimPlayerId)}.`);
 }
+
 
 async function bamboozleDestroyTroops() {
   const victimId = bbVictimPlayerId;
