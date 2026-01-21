@@ -2187,6 +2187,17 @@ return (
             );
           }
 
+          if (type === "DART_FREE_ARCHER") {
+              const tileId = String((e as any).tileId ?? "");
+              const n = Number((e as any).deltaArch ?? 1);
+              return (
+                <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                  <strong>{who}</strong> received 🎯 +{n} archer on tile #{tileId} (Dart reward)
+                </li>
+              );
+            }
+
+
           const delta = Number(e.delta ?? 0);
           const from = Number(e.from ?? 0);
           const to = Number(e.to ?? 0);

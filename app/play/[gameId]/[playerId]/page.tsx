@@ -1247,74 +1247,57 @@ async function moveTroops() {
   }
   
 
-      async function addFreeArcherFromDart() {
-    setStatus("");
+     async function addFreeArcherFromDart() {
+  setStatus("");
 
-    if (!dartPlaceTileId) {
-      setStatus("❌ Kies een tile om je gratis archer te plaatsen.");
-      return;
-    }
-
-    // client-side check: must be owned tile OR own basecamp
-    const tile = tiles.find((t) => t.id === dartPlaceTileId) ?? null;
-    if (!tile) {
-      setStatus("❌ Tile not found.");
-      return;
-    }
-
-    const isOwn =
-      tile.ownerPlayerId === playerId ||
-      (tile.isBasecamp && tile.basecampOwnerPlayerId === playerId);
-
-    if (!isOwn) {
-      setStatus("❌ Je mag enkel plaatsen op een tile die jij controleert (of je basecamp).");
-      return;
-    }
-
-    const depRef = doc(db, "games", gameId, "deployments", playerId, "tiles", dartPlaceTileId);
-    const tileRef = doc(db, "games", gameId, "tiles", dartPlaceTileId);
-
-    try {
-      await runTransaction(db, async (tx) => {
-        // re-check in transaction
-        const tSnap = await tx.get(tileRef);
-        if (!tSnap.exists()) throw new Error("Tile not found");
-        const tData = tSnap.data() as any;
-
-        const ok =
-          (tData.ownerPlayerId ?? null) === playerId ||
-          (!!tData.isBasecamp && (tData.basecampOwnerPlayerId ?? null) === playerId);
-
-        if (!ok) throw new Error("You can only place on a tile you control (or your basecamp)");
-
-        const dSnap = await tx.get(depRef);
-        const d = (dSnap.exists() ? (dSnap.data() as any) : {}) as any;
-
-        const cur = {
-          foot: Number(d.foot ?? 0),
-          cav: Number(d.cav ?? 0),
-          arch: Number(d.arch ?? 0),
-        };
-
-        // add 1 archer for free
-        tx.set(
-          depRef,
-          {
-            ...cur,
-            arch: cur.arch + 1,
-          },
-          { merge: true }
-        );
-      });
-
-      const placed = dartPlaceTileId;
-      setDartPlaceTileId("");
-      setStatus(`🎯✅ Gratis archer geplaatst op tile #${placed}.`);
-    } catch (err: any) {
-      console.error(err);
-      setStatus(`❌ ${err?.message ?? String(err)}`);
-    }
+  if (!playerId || !dartPlaceTileId) {
+    setStatus("❌ No tile selected for dart reward.");
+    return;
   }
+
+  const depRef = doc(db, "games", gameId, "deployments", dartPlaceTileId);
+
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(depRef);
+      if (!snap.exists()) throw new Error("Deployment not found");
+
+      const cur = (snap.data() as any) ?? {};
+      const curArch = Number(cur.arch ?? 0);
+
+      // ✅ add 1 archer for free
+      tx.set(
+        depRef,
+        {
+          ...cur,
+          arch: curArch + 1,
+        },
+        { merge: true }
+      );
+
+      // ✅ log: dart reward (free archer)
+      const logRef = doc(collection(db, "games", gameId, "bankLog"));
+      tx.set(
+        logRef,
+        {
+          createdAt: serverTimestamp(),
+          type: "DART_FREE_ARCHER",
+          playerId,
+          tileId: dartPlaceTileId,
+          deltaArch: 1,
+          note: "Dart reward",
+        },
+        { merge: true }
+      );
+    });
+
+    setStatus("🎯🏹 Archer added for FREE (Dart reward).");
+  } catch (err: any) {
+    console.error(err);
+    setStatus(`❌ ${err?.message ?? String(err)}`);
+  }
+}
+
 
 
     async function buyTroopsToBasecamp() {
