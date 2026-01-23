@@ -580,8 +580,8 @@ async function bamboozleDestroyDragonglass() {
   const p = players.find((x) => x.id === dgTargetPlayerId);
   const name = p?.name ?? dgTargetPlayerId;
 
-  const ok = confirm(`🎴 Destroy Dragonglass of ${name}?`);
-  if (!ok) return;
+  //const ok = confirm(`🎴 Destroy Dragonglass of ${name}?`);
+ // if (!ok) return;
 
   // remove dragonglass
   await setDoc(
@@ -616,7 +616,7 @@ async function bamboozleDestroyDragonglass() {
       );
 
 
-  alert(`✅ Dragonglass destroyed for ${name}.`);
+  //alert(`✅ Dragonglass destroyed for ${name}.`);
 }
     // listener tiles met troops voor geselecteerde victim
     useEffect(() => {
@@ -1147,8 +1147,8 @@ useEffect(() => {
 async function bamboozleDestroyMage(victimPlayerId: string) {
   if (!victimPlayerId) return;
 
-  const ok = confirm(`Destroy Mage of ${nameFor(victimPlayerId)}?`);
-  if (!ok) return;
+  //const ok = confirm(`Destroy Mage of ${nameFor(victimPlayerId)}?`);
+  // if (!ok) return;
 
   const mageRef = doc(db, "games", gameId, "mages", victimPlayerId);
   const victimPlayerRef = doc(db, "games", gameId, "players", victimPlayerId);
@@ -1175,7 +1175,7 @@ async function bamboozleDestroyMage(victimPlayerId: string) {
 
   await batch.commit();
 
-  alert(`🧙‍♂️ Mage destroyed for ${nameFor(victimPlayerId)}.`);
+ // alert(`🧙‍♂️ Mage destroyed for ${nameFor(victimPlayerId)}.`);
 }
 
 
