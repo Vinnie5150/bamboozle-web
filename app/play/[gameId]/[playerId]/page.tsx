@@ -1247,7 +1247,7 @@ async function moveTroops() {
   }
   
 
-     async function addFreeArcherFromDart() {
+    async function addFreeArcherFromDart() {
   setStatus("");
 
   if (!playerId || !dartPlaceTileId) {
@@ -1255,27 +1255,45 @@ async function moveTroops() {
     return;
   }
 
-  const depRef = doc(db, "games", gameId, "deployments", dartPlaceTileId);
+  const tileId = String(dartPlaceTileId);
+
+  // ✅ correct path
+  const depRef = doc(db, "games", gameId, "deployments", playerId, "tiles", tileId);
+  const tileRef = doc(db, "games", gameId, "tiles", tileId);
 
   try {
     await runTransaction(db, async (tx) => {
-      const snap = await tx.get(depRef);
-      if (!snap.exists()) throw new Error("Deployment not found");
+      // 1) security: re-check ownership in transaction
+      const tileSnap = await tx.get(tileRef);
+      if (!tileSnap.exists()) throw new Error("Tile not found");
 
-      const cur = (snap.data() as any) ?? {};
+      const t = tileSnap.data() as any;
+      const isOwn =
+        (t.ownerPlayerId ?? null) === playerId ||
+        (!!t.isBasecamp && (t.basecampOwnerPlayerId ?? null) === playerId);
+
+      if (!isOwn) throw new Error("You can only place a free archer on a tile you control.");
+
+      // 2) read existing deployment (may not exist yet!)
+      const depSnap = await tx.get(depRef);
+      const cur = (depSnap.exists() ? (depSnap.data() as any) : {}) as any;
+
+      const curFoot = Number(cur.foot ?? 0);
+      const curCav = Number(cur.cav ?? 0);
       const curArch = Number(cur.arch ?? 0);
 
-      // ✅ add 1 archer for free
+      // 3) write updated deployment (create if missing)
       tx.set(
         depRef,
         {
-          ...cur,
+          foot: curFoot,
+          cav: curCav,
           arch: curArch + 1,
         },
         { merge: true }
       );
 
-      // ✅ log: dart reward (free archer)
+      // 4) log so host sees it
       const logRef = doc(collection(db, "games", gameId, "bankLog"));
       tx.set(
         logRef,
@@ -1283,20 +1301,23 @@ async function moveTroops() {
           createdAt: serverTimestamp(),
           type: "DART_FREE_ARCHER",
           playerId,
-          tileId: dartPlaceTileId,
+          tileId,
           deltaArch: 1,
+          archFrom: curArch,
+          archTo: curArch + 1,
           note: "Dart reward",
         },
         { merge: true }
       );
     });
 
-    setStatus("🎯🏹 Archer added for FREE (Dart reward).");
+    setStatus(`🎯🏹 Archer added for FREE (Dart reward) on tile #${tileId}.`);
   } catch (err: any) {
     console.error(err);
     setStatus(`❌ ${err?.message ?? String(err)}`);
   }
 }
+
 
 
 
