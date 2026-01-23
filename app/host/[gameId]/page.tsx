@@ -593,16 +593,16 @@ async function bamboozleDestroyDragonglass() {
   );
 
   // optional: log to bankLog so everyone sees it
-  const logRef = doc(collection(db, "games", gameId, "bankLog"));
-  await setDoc(
-    logRef,
-    {
-      createdAt: serverTimestamp(),
-      type: "BAMBOOZLE_DG_DESTROY",
-      playerId: dgTargetPlayerId,
-    },
-    { merge: true }
-  );
+  //const logRef = doc(collection(db, "games", gameId, "bankLog"));
+  //await setDoc(
+   // logRef,
+   // {
+   //   createdAt: serverTimestamp(),
+   //   type: "BAMBOOZLE_DG_DESTROY",
+   //   playerId: dgTargetPlayerId,
+   // },
+   // { merge: true }
+ // );
   // ✅ also log to tile/battle log (so it appears in "Last 10 tile changes")
       const tileLogRef = doc(collection(db, "games", gameId, "battleLog"));
       await setDoc(
