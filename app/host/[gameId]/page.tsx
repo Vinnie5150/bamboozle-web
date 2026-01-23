@@ -603,6 +603,18 @@ async function bamboozleDestroyDragonglass() {
     },
     { merge: true }
   );
+  // ✅ also log to tile/battle log (so it appears in "Last 10 tile changes")
+      const tileLogRef = doc(collection(db, "games", gameId, "battleLog"));
+      await setDoc(
+        tileLogRef,
+        {
+          createdAt: serverTimestamp(),
+          type: "BAMBOOZLE_DG_DESTROY",
+          playerId: dgTargetPlayerId,
+        },
+        { merge: true }
+      );
+
 
   alert(`✅ Dragonglass destroyed for ${name}.`);
 }
@@ -2308,6 +2320,15 @@ return (
             text = `🎴 Tile #${tileId}: ${actor} took over from ${oldOwner} (+1 🐎 cav, enemy troops wiped${
               mageKilled ? ", mage destroyed" : ""
             })`;
+            } else if (e.type === "BAMBOOZLE_DESTROY_MAGE") {
+                const victim = nameFor((e as any).playerId);
+                const tileId = (e as any).tileId ? String((e as any).tileId) : "";
+                text = tileId
+                  ? `🎴 Mage destroyed for ${victim} on tile #${tileId}`
+                  : `🎴 Mage destroyed for ${victim}`;
+              } else if (e.type === "BAMBOOZLE_DG_DESTROY") {
+                const victim = nameFor((e as any).playerId);
+                text = `🎴 Dragonglass destroyed for ${victim}`;
           } else if (e.type === "FROST_GIANTS_ATTACK") {
             const ids = Array.isArray((e as any).attackedTileIds) ? (e as any).attackedTileIds : [];
             const results = Array.isArray((e as any).results) ? (e as any).results : [];
