@@ -2197,6 +2197,50 @@ return (
               );
             }
 
+            if (type === "BEERCULES") {
+              const reward = String((e as any).reward ?? "");
+
+              // reward: CREDITS
+              if (reward === "CREDITS") {
+                const n = Number((e as any).deltaCredits ?? 5000);
+                const beerFrom = Number((e as any).beerFrom ?? 0);
+                const beerTo = Number((e as any).beerTo ?? beerFrom + 1);
+
+                return (
+                  <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                    <strong>{who}</strong> 🍺 Beercules {beerFrom} → {beerTo}: +{n} credits
+                  </li>
+                );
+              }
+
+              // reward: EXP
+              if (reward === "EXP") {
+                const expType = String((e as any).expType ?? "");
+                const icon = expType === "foot" ? "🗡️" : expType === "cav" ? "🐎" : expType === "arch" ? "🏹" : "⭐";
+                const from = Number((e as any).expFrom ?? 0);
+                const to = Number((e as any).expTo ?? from + 1);
+
+                const beerFrom = Number((e as any).beerFrom ?? 0);
+                const beerTo = Number((e as any).beerTo ?? beerFrom + 1);
+
+                return (
+                  <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                    <strong>{who}</strong> 🍺 Beercules {beerFrom} → {beerTo}: +1 EXP {icon} ({from} → {to})
+                  </li>
+                );
+              }
+
+              // reward: BAMBOOZLE (physical)
+              const beerFrom = Number((e as any).beerFrom ?? 0);
+              const beerTo = Number((e as any).beerTo ?? beerFrom + 1);
+
+              return (
+                <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                  <strong>{who}</strong> 🍺 Beercules {beerFrom} → {beerTo}: 🎴 Draw 1 Bamboozle card (physical)
+                </li>
+              );
+            }
+
 
           const delta = Number(e.delta ?? 0);
           const from = Number(e.from ?? 0);

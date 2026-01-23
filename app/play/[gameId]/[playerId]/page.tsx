@@ -1202,6 +1202,7 @@ async function moveTroops() {
 
         // 1) always increment Beercules
         const nextBeer = curBeer + 1;
+        const logRef = doc(collection(db, "games", gameId, "bankLog"));
 
         // 2) apply chosen reward
         if (beerculesReward === "CREDITS") {
@@ -1209,6 +1210,19 @@ async function moveTroops() {
             beerCount: nextBeer,
             credits: curCredits + 5000,
           });
+          tx.set(
+                logRef,
+                {
+                  createdAt: serverTimestamp(),
+                  type: "BEERCULES",
+                  playerId,
+                  beerFrom: curBeer,
+                  beerTo: nextBeer,
+                  reward: "CREDITS",
+                  deltaCredits: 5000,
+                },
+                { merge: true }
+              );
           return;
         }
 
@@ -1223,6 +1237,21 @@ async function moveTroops() {
             beerCount: nextBeer,
             exp: nextExp,
           });
+          tx.set(
+            logRef,
+            {
+              createdAt: serverTimestamp(),
+              type: "BEERCULES",
+              playerId,
+              beerFrom: curBeer,
+              beerTo: nextBeer,
+              reward: "EXP",
+              expType: t,
+              expFrom: curExp[t],
+              expTo: curExp[t] + 1,
+            },
+            { merge: true }
+          );
           return;
         }
 
@@ -1230,6 +1259,18 @@ async function moveTroops() {
         tx.update(playerRef, {
           beerCount: nextBeer,
         });
+        tx.set(
+          logRef,
+          {
+            createdAt: serverTimestamp(),
+            type: "BEERCULES",
+            playerId,
+            beerFrom: curBeer,
+            beerTo: nextBeer,
+            reward: "BAMBOOZLE",
+          },
+          { merge: true }
+        );
       });
 
       // UI feedback after transaction
