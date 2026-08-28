@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { HEX_TILES_60 } from "./tileLayout";
 
-type Tile = { id: string; ownerPlayerId: string | null; isBasecamp: boolean };
+type Tile = { id: string; ownerPlayerId: string | null; isBasecamp: boolean; farmers?: number };
 
 export default function MapSvg({
   tiles,
@@ -13,6 +13,7 @@ export default function MapSvg({
   selectedTileId,
   onSelectTile,
   highlightTileIds,
+  tieFighterPlayers,
 }: {
   tiles: Tile[];
   tileTroops: Record<string, { foot: number; cav: number; arch: number }>;
@@ -21,9 +22,19 @@ export default function MapSvg({
   selectedTileId?: string | null;
   onSelectTile?: (tileId: string) => void;
   highlightTileIds?: string[];
+
+  // Optional so existing MapSvg calls keep working until Play/Host are wired up.
+  tieFighterPlayers?: Array<{
+    id: string;
+    name: string;
+    tieFighters?: number;
+  }>;
 }) {
   const VIEW_W = 1150;
-  const VIEW_H = 600;
+  const VIEW_H = 690;
+
+  // Extra room above the board for TIE Fighters.
+  const AIRSPACE_H = 105;
   const PAD = 40;
 
   const tileById = useMemo(() => new Map(tiles.map((t) => [String(t.id), t] as const)), [tiles]);
@@ -39,7 +50,7 @@ export default function MapSvg({
     strokeLight: "rgba(243,231,207,0.95)",
   };
 
-  // Auto-fit the hex blob into 1150x600
+  // Auto-fit the hex blob below the dedicated airspace.
   const { s, tx, ty, centers } = useMemo(() => {
     let minX = Infinity,
       minY = Infinity,
@@ -58,19 +69,37 @@ export default function MapSvg({
     const rawW = maxX - minX;
     const rawH = maxY - minY;
 
-    const scale = Math.min((VIEW_W - 2 * PAD) / rawW, (VIEW_H - 2 * PAD) / rawH);
+    const boardH = VIEW_H - AIRSPACE_H;
+
+    const scale = Math.min(
+      (VIEW_W - 2 * PAD) / rawW,
+      (boardH - 2 * PAD) / rawH
+    );
+
     const bboxW = rawW * scale;
     const bboxH = rawH * scale;
 
     const extraX = (VIEW_W - 2 * PAD - bboxW) / 2;
-    const extraY = (VIEW_H - 2 * PAD - bboxH) / 2;
+    const extraY = (boardH - 2 * PAD - bboxH) / 2;
 
     const tX = PAD + extraX - minX * scale;
-    const tY = PAD + extraY - minY * scale;
+    const tY = AIRSPACE_H + PAD + extraY - minY * scale;
 
     const centers = HEX_TILES_60.map((t) => ({ cx: t.cx, cy: t.cy }));
     return { s: scale, tx: tX, ty: tY, centers };
   }, []);
+
+  const activeTieFighterPlayers = useMemo(() => {
+    return (tieFighterPlayers ?? [])
+      .map((p) => ({
+        ...p,
+        tieFighters: Math.max(
+          0,
+          Math.floor(Number(p.tieFighters ?? 0))
+        ),
+      }))
+      .filter((p) => p.tieFighters > 0);
+  }, [tieFighterPlayers]);
 
   return (
     <div
@@ -176,6 +205,118 @@ export default function MapSvg({
           HORGOTH
         </text>
 
+        {/* ===== AIRSPACE: TIE FIGHTERS ===== */}
+        {activeTieFighterPlayers.length > 0 && (
+          <g pointerEvents="none">
+            {/* subtle airspace divider */}
+            <line
+              x1={55}
+              y1={AIRSPACE_H - 7}
+              x2={VIEW_W - 55}
+              y2={AIRSPACE_H - 7}
+              stroke="rgba(243,231,207,0.38)"
+              strokeWidth={1}
+              strokeDasharray="6 8"
+            />
+
+            {activeTieFighterPlayers.map((p, idx) => {
+              const count = activeTieFighterPlayers.length;
+              const usableW = VIEW_W - 120;
+              const slotW = usableW / Math.max(1, count);
+              const x = 60 + slotW * idx + slotW / 2;
+              const playerColor = colorForPlayer(p.id);
+
+              return (
+                <g key={`tie-${p.id}`} transform={`translate(${x},92)`}>
+                  {/* Player name */}
+                  <text
+                    x={0}
+                    y={-16}
+                    textAnchor="middle"
+                    fontSize={12}
+                    fontWeight={800}
+                    fill="#1a120b"
+                    stroke="rgba(243,231,207,0.96)"
+                    strokeWidth={3}
+                    paintOrder="stroke"
+                    style={{
+                      userSelect: "none",
+                      fontFamily: "Georgia, 'Times New Roman', serif",
+                    }}
+                  >
+                    {p.name}
+                  </text>
+
+                  {/* Stylised twin-wing fighter in the player's colour */}
+                  <g filter="url(#badgeShadow)">
+                    <path
+                      d="M -22 -10 L -14 -14 L -14 14 L -22 10 Z"
+                      fill={playerColor}
+                      stroke="#1a120b"
+                      strokeWidth={1.6}
+                    />
+                    <path
+                      d="M 22 -10 L 14 -14 L 14 14 L 22 10 Z"
+                      fill={playerColor}
+                      stroke="#1a120b"
+                      strokeWidth={1.6}
+                    />
+                    <line
+                      x1={-14}
+                      y1={0}
+                      x2={-6}
+                      y2={0}
+                      stroke="#1a120b"
+                      strokeWidth={2.4}
+                    />
+                    <line
+                      x1={14}
+                      y1={0}
+                      x2={6}
+                      y2={0}
+                      stroke="#1a120b"
+                      strokeWidth={2.4}
+                    />
+                    <circle
+                      cx={0}
+                      cy={0}
+                      r={7}
+                      fill={playerColor}
+                      stroke="#1a120b"
+                      strokeWidth={2}
+                    />
+                    <circle
+                      cx={0}
+                      cy={0}
+                      r={2.3}
+                      fill="#1a120b"
+                    />
+                  </g>
+
+                  {/* Fighter count */}
+                  <text
+                    x={30}
+                    y={5}
+                    textAnchor="start"
+                    fontSize={14}
+                    fontWeight={900}
+                    fill="#1a120b"
+                    stroke="rgba(243,231,207,0.96)"
+                    strokeWidth={3}
+                    paintOrder="stroke"
+                    style={{
+                      userSelect: "none",
+                      fontFamily: "Georgia, 'Times New Roman', serif",
+                    }}
+                  >
+                    {`×${p.tieFighters}`}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        )}
+
         {/* Light parchment wash so unit icons stay readable */}
         <rect x="0" y="0" width={VIEW_W} height={VIEW_H} fill="#f3e7cf" opacity="0.35" pointerEvents="none" />
 
@@ -183,7 +324,7 @@ export default function MapSvg({
         <rect x="0" y="0" width={VIEW_W} height={VIEW_H} filter="url(#paperTexture)" opacity="0.30" pointerEvents="none" />
 
         {/* Tiles */}
-        <g transform={`translate(${tx},${ty}) scale(${s})`}>
+        <g transform={`translate(${tx + 22},${ty - 24}) scale(${s})`}>
           {HEX_TILES_60.map((region, i) => {
             const id = String(region.id); // "0".."59"
             const t = tileById.get(id);
@@ -227,6 +368,8 @@ export default function MapSvg({
             // icon badges
             const hasMageHere = !!mageByTile?.[id];
             const isBasecamp = !!t?.isBasecamp;
+            const farmers = Math.max(0, Math.floor(Number(t?.farmers ?? 0)));
+            const hasFarmers = farmers > 0;
 
             return (
               <g key={id} filter={regionFilter}>
@@ -299,8 +442,8 @@ export default function MapSvg({
                 ) : null}
 
 
-                {/* ===== ICON BADGES (Mage / Basecamp) ===== */}
-                {(hasMageHere || isBasecamp) && (
+                {/* ===== ICON BADGES (Mage / Basecamp / Farmers) ===== */}
+                {(hasMageHere || isBasecamp || hasFarmers) && (
                   <g onClick={onPick} style={{ cursor }}>
                     {/* Mage badge (top-right of center) */}
                     {hasMageHere && (
@@ -354,6 +497,36 @@ export default function MapSvg({
                           style={{ userSelect: "none" }}
                         >
                           🏰
+                        </text>
+                      </g>
+                    )}
+
+                    {/* Farmers badge: same position as basecamp badge.
+                        Farmers are never allowed on basecamps, so these cannot overlap. */}
+                    {hasFarmers && (
+                      <g>
+                        <circle
+                          cx={c.cx - 22}
+                          cy={c.cy - 18}
+                          r={10}
+                          fill="rgba(0,0,0,0.45)"
+                          stroke="rgba(243,231,207,0.55)"
+                          strokeWidth={1}
+                          filter="url(#badgeShadow)"
+                          vectorEffect="non-scaling-stroke"
+                        />
+                        <text
+                          x={c.cx - 22}
+                          y={c.cy - 14}
+                          textAnchor="middle"
+                          fontSize="11"
+                          fontWeight={700}
+                          stroke="rgba(243,231,207,0.95)"
+                          strokeWidth={2}
+                          paintOrder="stroke"
+                          style={{ userSelect: "none", pointerEvents: "none" }}
+                        >
+                          {`🌾${farmers}`}
                         </text>
                       </g>
                     )}

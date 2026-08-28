@@ -1,3 +1,5 @@
+// Host page
+
 "use client";
 
 import { useEffect, useState, useRef } from "react";
@@ -6,6 +8,7 @@ import { useParams } from "next/navigation";
 import { db } from "@/lib/firebase";
 import { onAuthStateChanged, signInAnonymously } from "firebase/auth";
 import { auth } from "@/lib/firebase";
+
 
 import {
   collection,
@@ -32,6 +35,8 @@ type Player = {
   credits: number;
   dominance: number;
   beerCount?: number;
+  pregameRank?: number;
+  tieFighters?: number;
   units: {
     foot: number;
     cav: number;
@@ -50,16 +55,30 @@ type Tile = {
   isBasecamp: boolean;
   basecampOwnerPlayerId?: string | null;
   isStartTile?: boolean;
+  farmers?: number;
 };
 
 type DraftRow = {
+  pregameRank: number | "";
+};
+
+type PregameReward = {
   credits: number;
   foot: number;
   cav: number;
   arch: number;
-  expFoot: number;
-  expCav: number;
-  expArch: number;
+  extra?: string;
+};
+
+const PREGAME_REWARDS: Record<number, PregameReward> = {
+  1: { credits: 25000, foot: 5, cav: 3, arch: 2 },
+  2: { credits: 22000, foot: 5, cav: 5, arch: 0 },
+  3: { credits: 19000, foot: 5, cav: 4, arch: 2 },
+  4: { credits: 16000, foot: 4, cav: 2, arch: 2, extra: "+1 Dragonglass" },
+  5: { credits: 15000, foot: 3, cav: 4, arch: 4 },
+  6: { credits: 15000, foot: 3, cav: 3, arch: 2, extra: "+1 EXP of choice" },
+  7: { credits: 15000, foot: 7, cav: 3, arch: 3 },
+  8: { credits: 17000, foot: 4, cav: 2, arch: 1, extra: "+1 Mage" },
 };
 
 
@@ -80,6 +99,76 @@ export default function HostPage() {
 
   const [battleLog, setBattleLog] = useState<Array<{ id: string } & any>>([]);
   const [bankLog, setBankLog] = useState<Array<{ id: string } & any>>([]);
+
+  // ===== Central host audio =====
+  const [hostAudioEnabled, setHostAudioEnabled] = useState(false);
+  const hostAudioEnabledRef = useRef(false);
+  const battleLogInitialSnapshotSeenRef = useRef(false);
+  const playersForAudioRef = useRef<Player[]>([]);
+
+  useEffect(() => {
+    playersForAudioRef.current = players;
+  }, [players]);
+
+  function enableHostAudio() {
+    hostAudioEnabledRef.current = true;
+    setHostAudioEnabled(true);
+  }
+
+  function playHostAudio(src: string, volume = 0.9) {
+    if (!hostAudioEnabledRef.current) return;
+
+    const a = new Audio(src);
+    a.volume = volume;
+    a.play().catch((err) => {
+      console.warn(`Could not play host audio: ${src}`, err);
+    });
+  }
+
+  function playHostAirstrikeAudio() {
+    playHostAudio("/audio/airstrike.mp3", 0.9);
+  }
+
+  function victorySoundForAvatar(avatar: string | undefined | null) {
+    const a = String(avatar ?? "").trim();
+
+    const victorySounds: Record<string, string> = {
+      "/avatars/Luffy.jpg": "/audio/Luffy.mp3",
+      "/avatars/Darth Vader.jpg": "/audio/Darth Vader.mp3",
+      "/avatars/R2D2.jpg": "/audio/R2D2.mp3",
+      "/avatars/Grogu.jpg": "/audio/Grogu.mp3",
+      "/avatars/Zeb.jpg": "/audio/Zeb.mp3",
+      "/avatars/Chopper.jpg": "/audio/Chopper.mp3",
+      "/avatars/Boba fett.jpg": "/audio/Boba fett.mp3",
+      "/avatars/Roronoa Zoro.jpg": "/audio/Roronoa Zoro.mp3",
+    };
+
+    return victorySounds[a] ?? null;
+  }
+
+  function playVictorySoundForPlayer(playerId: string | null | undefined) {
+    if (!playerId) return;
+
+    const winner = playersForAudioRef.current.find((p) => p.id === playerId);
+    if (!winner) {
+      console.warn("Victory sound: winner not found in Host players list:", playerId);
+      return;
+    }
+
+    const src = victorySoundForAvatar(winner.avatar);
+    if (!src) {
+      console.warn("Victory sound: no sound mapped for avatar:", winner.avatar);
+      return;
+    }
+
+    playHostAudio(src, 0.95);
+  }
+
+  // ===== Farmers: automatic income =====
+  const [gameStatus, setGameStatus] = useState<string>("");
+  const farmerPayoutInFlightRef = useRef(false);
+  const FARMER_INCOME_PER_MINUTE = 100;
+  const FARMER_PAYOUT_MS = 60 * 1000;
 
   const [magesByPlayer, setMagesByPlayer] = useState<Record<string, { tileId: string } | null>>(
     {}
@@ -137,6 +226,7 @@ function onPanEnd() {
   const [startEndsAtMs, setStartEndsAtMs] = useState<number | null>(null);
   const [startActive, setStartActive] = useState(false);
   const [nowMs, setNowMs] = useState<number>(Date.now());
+  const autoFinalizeStartedRef = useRef(false);
   // winter is coming
   const [winterLevel, setWinterLevel] = useState<number>(0);
   // bamboozle: take over enemy tile
@@ -176,7 +266,7 @@ useEffect(() => {
   useEffect(() => {
     const q = query(
       collection(db, "games", gameId, "players"),
-      orderBy("createdAt")
+      orderBy("joinedAt")
     );
 
     const unsub = onSnapshot(q, (snapshot) => {
@@ -193,13 +283,7 @@ useEffect(() => {
         for (const p of list) {
           if (!next[p.id]) {
             next[p.id] = {
-              credits: p.credits ?? 0,
-              foot: p.units?.foot ?? 0,
-              cav: p.units?.cav ?? 0,
-              arch: p.units?.arch ?? 0,
-              expFoot: p.exp?.foot ?? 0,
-              expCav: p.exp?.cav ?? 0,
-              expArch: p.exp?.arch ?? 0,
+              pregameRank: p.pregameRank ?? "",
             };
           }
         }
@@ -347,6 +431,32 @@ useEffect(() => {
   const unsub = onSnapshot(ql, (snap) => {
     const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
     setBattleLog(rows);
+
+    // Do not replay old airstrikes when the Host page opens/refreshed.
+    if (!battleLogInitialSnapshotSeenRef.current) {
+      battleLogInitialSnapshotSeenRef.current = true;
+      return;
+    }
+
+    for (const change of snap.docChanges()) {
+      if (change.type !== "added") continue;
+      const entry = change.doc.data() as any;
+
+      // AIRSTRIKE has absolute priority: exactly one central sound.
+      // Even if the airstrike neutralizes/wins the tile, no character victory sound follows.
+      if (entry?.type === "AIRSTRIKE") {
+        playHostAirstrikeAudio();
+        continue;
+      }
+
+      // Ordinary battles: play the personal sound of the actual winner.
+      if (
+        (entry?.type === "ATTACKER_WIN" || entry?.type === "DEFENDER_HOLD") &&
+        entry?.winnerId
+      ) {
+        playVictorySoundForPlayer(String(entry.winnerId));
+      }
+    }
   });
 
   return () => unsub();
@@ -378,6 +488,7 @@ useEffect(() => {
       const data = snap.data() as any;
       const startClaim = data?.startClaim ?? null;
 
+      setGameStatus(String(data?.status ?? ""));
       setStartActive(!!startClaim?.active);
 
       const endsAt = startClaim?.endsAt?.toDate?.()
@@ -398,6 +509,258 @@ useEffect(() => {
     const t = setInterval(() => setNowMs(Date.now()), 250);
     return () => clearInterval(t);
   }, []);
+
+  async function processFarmerPayout() {
+    if (!gameId) return;
+    if (farmerPayoutInFlightRef.current) return;
+    if (gameStatus !== "live" && gameStatus !== "playing") return;
+    if (!tiles || tiles.length === 0) return;
+
+    farmerPayoutInFlightRef.current = true;
+
+    try {
+      const gameRef = doc(db, "games", gameId);
+      const tileRefs = tiles.map((t) => doc(db, "games", gameId, "tiles", String(t.id)));
+
+      await runTransaction(db, async (tx) => {
+        // ----- READ GAME FIRST -----
+        const gameSnap = await tx.get(gameRef);
+        if (!gameSnap.exists()) return;
+
+        const gameData = gameSnap.data() as any;
+        const statusNow = String(gameData?.status ?? "");
+
+        if (statusNow !== "live" && statusNow !== "playing") return;
+
+        const nowMs = Date.now();
+        const lastRaw = gameData?.lastFarmerPayoutAt ?? null;
+
+        let lastMs: number | null = null;
+
+        if (lastRaw?.toMillis) {
+          lastMs = Number(lastRaw.toMillis());
+        } else if (lastRaw?.toDate) {
+          lastMs = Number(lastRaw.toDate().getTime());
+        } else if (lastRaw instanceof Date) {
+          lastMs = lastRaw.getTime();
+        } else if (typeof lastRaw === "number") {
+          lastMs = lastRaw;
+        }
+
+        // Legacy/live game without a farmer clock:
+        // start counting from now, without paying an artificial backlog.
+        if (!lastMs || !Number.isFinite(lastMs)) {
+          tx.set(
+            gameRef,
+            { lastFarmerPayoutAt: new Date(nowMs) },
+            { merge: true }
+          );
+          return;
+        }
+
+        const elapsedMinutes = Math.floor((nowMs - lastMs) / FARMER_PAYOUT_MS);
+        if (elapsedMinutes <= 0) return;
+
+        // ----- READ ALL TILES -----
+        const tileSnaps = [];
+        for (const ref of tileRefs) {
+          tileSnaps.push(await tx.get(ref));
+        }
+
+        const farmerCountsByOwner: Record<string, number> = {};
+
+        tileSnaps.forEach((snap) => {
+          if (!snap.exists()) return;
+
+          const t = snap.data() as any;
+          const farmers = Math.max(0, Math.floor(Number(t?.farmers ?? 0)));
+          const ownerId = String(t?.ownerPlayerId ?? "");
+          const isBasecamp = !!t?.isBasecamp;
+
+          if (farmers <= 0) return;
+          if (!ownerId) return; // neutral land produces nothing
+          if (isBasecamp) return; // defensive rule; farmers should never exist here
+
+          farmerCountsByOwner[ownerId] =
+            (farmerCountsByOwner[ownerId] ?? 0) + farmers;
+        });
+
+        const ownerIds = Object.keys(farmerCountsByOwner);
+
+        // ----- READ PLAYER DOCS BEFORE WRITES -----
+        const playerSnaps: Array<{
+          playerId: string;
+          ref: ReturnType<typeof doc>;
+          snap: any;
+        }> = [];
+
+        for (const ownerId of ownerIds) {
+          const playerRef = doc(db, "games", gameId, "players", ownerId);
+          const pSnap = await tx.get(playerRef);
+          playerSnaps.push({ playerId: ownerId, ref: playerRef, snap: pSnap });
+        }
+
+        // Move the payout marker by full minutes only.
+        // This preserves the leftover seconds instead of drifting over time.
+        const nextPayoutMs =
+          lastMs + elapsedMinutes * FARMER_PAYOUT_MS;
+
+        // ----- WRITES -----
+        tx.set(
+          gameRef,
+          {
+            lastFarmerPayoutAt: new Date(nextPayoutMs),
+          },
+          { merge: true }
+        );
+
+        for (const row of playerSnaps) {
+          if (!row.snap.exists()) continue;
+
+          const farmers = farmerCountsByOwner[row.playerId] ?? 0;
+          if (farmers <= 0) continue;
+
+          const income =
+            farmers *
+            FARMER_INCOME_PER_MINUTE *
+            elapsedMinutes;
+
+          const pdata = row.snap.data() as any;
+          const creditsBefore = Number(pdata?.credits ?? 0);
+          const creditsAfter = creditsBefore + income;
+
+          tx.update(row.ref, {
+            credits: creditsAfter,
+          });
+
+          const logRef = doc(collection(db, "games", gameId, "bankLog"));
+          tx.set(
+            logRef,
+            {
+              createdAt: serverTimestamp(),
+              type: "FARMER_INCOME",
+              playerId: row.playerId,
+              farmers,
+              elapsedMinutes,
+              incomePerFarmerPerMinute: FARMER_INCOME_PER_MINUTE,
+              delta: income,
+              from: creditsBefore,
+              to: creditsAfter,
+            },
+            { merge: true }
+          );
+        }
+      });
+    } catch (err) {
+      console.error("Farmer payout failed:", err);
+    } finally {
+      farmerPayoutInFlightRef.current = false;
+    }
+  }
+
+  // Check regularly; the transaction itself only pays when a full minute elapsed.
+  // The Firestore payout marker prevents duplicate payments, even with two host tabs.
+  useEffect(() => {
+    if (gameStatus !== "live" && gameStatus !== "playing") return;
+
+    processFarmerPayout().catch((err) =>
+      console.error("Initial farmer payout check failed:", err)
+    );
+
+    const timer = window.setInterval(() => {
+      processFarmerPayout().catch((err) =>
+        console.error("Automatic farmer payout check failed:", err)
+      );
+    }, 5000);
+
+    return () => window.clearInterval(timer);
+
+    // tiles are deliberately included so newly purchased farmers are seen immediately.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameId, gameStatus, tiles]);
+
+  async function pauseGame() {
+    if (gameStatus !== "live" && gameStatus !== "playing") {
+      alert("❌ The game is not currently running.");
+      return;
+    }
+
+    try {
+      await setDoc(
+        doc(db, "games", gameId),
+        {
+          status: "paused",
+          pausedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      alert("⏸️ Game paused.");
+    } catch (err: any) {
+      console.error(err);
+      alert(`❌ ${err?.message ?? String(err)}`);
+    }
+  }
+
+  async function resumeGame() {
+    if (gameStatus !== "paused") {
+      alert("❌ The game is not paused.");
+      return;
+    }
+
+    try {
+      await setDoc(
+        doc(db, "games", gameId),
+        {
+          status: "live",
+          resumedAt: serverTimestamp(),
+
+          // Important: paused time must NOT generate farmer income.
+          // Start the farmer clock again from the resume moment.
+          lastFarmerPayoutAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      alert("▶️ Game resumed.");
+    } catch (err: any) {
+      console.error(err);
+      alert(`❌ ${err?.message ?? String(err)}`);
+    }
+  }
+
+  async function endGame() {
+    if (gameStatus === "finished") {
+      alert("ℹ️ This game has already ended.");
+      return;
+    }
+
+    const ok = window.confirm(
+      "End this Horgoth game? Players will no longer be able to perform actions. The final game state will remain saved."
+    );
+
+    if (!ok) return;
+
+    try {
+      await setDoc(
+        doc(db, "games", gameId),
+        {
+          status: "finished",
+          finishedAt: serverTimestamp(),
+          startClaim: {
+            active: false,
+          },
+        },
+        { merge: true }
+      );
+
+      alert("🏁 Game ended. Final state saved.");
+    } catch (err: any) {
+      console.error(err);
+      alert(`❌ ${err?.message ?? String(err)}`);
+    }
+  }
+
 
   async function setWinterLevelInGame(nextLevel: number) {
   const lvl = Math.max(0, Math.min(10, Math.floor(Number(nextLevel) || 0)));
@@ -992,20 +1355,44 @@ useEffect(() => {
         alert("✅ Basecamps assigned (fixed tiles, random players)");
       }
 
-
   async function startStartTimer() {
+    if (!tiles || tiles.length !== 60) {
+      alert("❌ Initialize the 60 tiles first.");
+      return;
+    }
+
+    if (players.length === 0) {
+      alert("❌ No players have joined yet.");
+      return;
+    }
+
+    // Every player needs a basecamp before the deployment phase can start.
+    for (const p of players) {
+      const bcId = findBasecampTileIdForPlayer(p.id);
+      if (!bcId) {
+        alert(`❌ No basecamp assigned for ${p.name ?? p.id}. Assign basecamps first.`);
+        return;
+      }
+    }
+
     const ref = doc(db, "games", gameId);
+
     await setDoc(
       ref,
       {
+        status: "starting",
         startClaim: {
           active: true,
-          endsAt: new Date(Date.now() + 2 * 60 * 1000),
+          endsAt: new Date(Date.now() + 10 * 60 * 1000),
           startedAt: serverTimestamp(),
         },
+        startFinalized: false,
       },
       { merge: true }
     );
+
+    autoFinalizeStartedRef.current = false;
+    alert("⏱️ 10-minute deployment phase started!");
   }
 
   async function lockStartNow() {
@@ -1018,119 +1405,187 @@ useEffect(() => {
       ? Math.max(0, Math.ceil((startEndsAtMs - nowMs) / 1000))
       : null;
 
+  const timeLeftDisplay =
+    timeLeftSec !== null
+      ? `${Math.floor(timeLeftSec / 60)}:${String(timeLeftSec % 60).padStart(2, "0")}`
+      : "-";
+
   async function savePregameSetup() {
+    // Every player must have a valid Destructo Truck ranking.
+    for (const p of players) {
+      const rank = Number(draft[p.id]?.pregameRank);
+
+      if (!rank || rank < 1 || rank > 8) {
+        alert(`❌ Choose a Destructo Truck rank for ${p.name}.`);
+        return;
+      }
+    }
+
+    // A ranking position can only be assigned once.
+    const ranks = players.map((p) => Number(draft[p.id]?.pregameRank));
+
+    if (new Set(ranks).size !== ranks.length) {
+      alert("❌ Every Destructo Truck rank can only be assigned once.");
+      return;
+    }
+
     const batch = writeBatch(db);
 
     players.forEach((p) => {
-      const d = draft[p.id];
-      if (!d) return;
+      const rank = Number(draft[p.id]?.pregameRank);
+      const reward = PREGAME_REWARDS[rank];
+
+      if (!reward) return;
 
       const ref = doc(db, "games", gameId, "players", p.id);
       batch.update(ref, {
-      credits: d.credits,
-      units: { foot: d.foot, cav: d.cav, arch: d.arch },
-      exp: { foot: d.expFoot, cav: d.expCav, arch: d.expArch },
+        pregameRank: rank,
+        credits: reward.credits,
+        units: { foot: reward.foot, cav: reward.cav, arch: reward.arch },
 
-      startCredits: d.credits,
-      startUnits: { foot: d.foot, cav: d.cav, arch: d.arch },
-      startExp: { foot: d.expFoot, cav: d.expCav, arch: d.expArch },
+        startCredits: reward.credits,
+        startUnits: { foot: reward.foot, cav: reward.cav, arch: reward.arch },
       });
     });
 
     await batch.commit();
-    alert("✅ Pregame setup saved");
+    alert("✅ Destructo Truck rankings and pregame rewards saved");
   }
 
   function findBasecampTileIdForPlayer(playerId: string): string | null {
-  const bc = tiles.find(
-    (t) => t.isBasecamp && t.basecampOwnerPlayerId === playerId
-  );
-  return bc ? bc.id : null;
-}
-  async function finalizeStartAndFillRemainder() {
-  // 1) lock start phase in game doc
-  await lockStartNow();
-
-  for (const p of players) {
-    const basecampTileId = findBasecampTileIdForPlayer(p.id);
-    if (!basecampTileId) {
-      alert(`No basecamp found for player ${p.name}`);
-      return;
-    }
-
-    // read player doc to get startUnits
-    const pRef = doc(db, "games", gameId, "players", p.id);
-    const pSnap = await getDoc(pRef);
-    const pdata = (pSnap.data() as any) ?? {};
-    const su = pdata.startUnits ?? pdata.units ?? { foot: 0, cav: 0, arch: 0 };
-
-    const startUnits = {
-      foot: Number(su.foot ?? 0),
-      cav: Number(su.cav ?? 0),
-      arch: Number(su.arch ?? 0),
-    };
-
-    // read all deployments for this player
-    const depCol = collection(db, "games", gameId, "deployments", p.id, "tiles");
-    const depSnap = await getDocs(depCol);
-
-    let deployed = { foot: 0, cav: 0, arch: 0 };
-    let basecampExisting = { foot: 0, cav: 0, arch: 0 };
-
-    depSnap.docs.forEach((d) => {
-      const data = d.data() as any;
-      const entry = {
-        foot: Number(data.foot ?? 0),
-        cav: Number(data.cav ?? 0),
-        arch: Number(data.arch ?? 0),
-      };
-
-      deployed.foot += entry.foot;
-      deployed.cav += entry.cav;
-      deployed.arch += entry.arch;
-
-      if (d.id === basecampTileId) {
-        basecampExisting = entry;
-      }
-    });
-
-    const remaining = {
-      foot: Math.max(0, startUnits.foot - deployed.foot),
-      cav: Math.max(0, startUnits.cav - deployed.cav),
-      arch: Math.max(0, startUnits.arch - deployed.arch),
-    };
-
-    // write remainder to basecamp deployment
-    const bcDepRef = doc(
-      db,
-      "games",
-      gameId,
-      "deployments",
-      p.id,
-      "tiles",
-      basecampTileId
+    const bc = tiles.find(
+      (t) => t.isBasecamp && t.basecampOwnerPlayerId === playerId
     );
-
-    await setDoc(
-      bcDepRef,
-      {
-        foot: basecampExisting.foot + remaining.foot,
-        cav: basecampExisting.cav + remaining.cav,
-        arch: basecampExisting.arch + remaining.arch,
-      },
-      { merge: true }
-    );
-
-    // lock player
-    await setDoc(
-      pRef,
-      { startReady: true, startReadyAt: serverTimestamp() },
-      { merge: true }
-    );
+    return bc ? bc.id : null;
   }
 
-  alert("✅ Finalized. Remainder troops added to basecamps and players locked.");
-}
+  async function finalizeStartAndFillRemainder() {
+    // Prevent double finalization from the timer and the manual button.
+    if (autoFinalizeStartedRef.current) return;
+    autoFinalizeStartedRef.current = true;
+
+    try {
+      // Lock the start phase first so players can no longer change deployments.
+      await lockStartNow();
+
+      for (const p of players) {
+        const basecampTileId = findBasecampTileIdForPlayer(p.id);
+
+        if (!basecampTileId) {
+          console.error(`No basecamp found for ${p.name}`);
+          continue;
+        }
+
+        // Read the player's original starting units.
+        const pRef = doc(db, "games", gameId, "players", p.id);
+        const pSnap = await getDoc(pRef);
+        const pdata = (pSnap.data() as any) ?? {};
+        const su = pdata.startUnits ?? pdata.units ?? { foot: 0, cav: 0, arch: 0 };
+
+        const startUnits = {
+          foot: Number(su.foot ?? 0),
+          cav: Number(su.cav ?? 0),
+          arch: Number(su.arch ?? 0),
+        };
+
+        // Read every deployment already made by this player.
+        const depCol = collection(db, "games", gameId, "deployments", p.id, "tiles");
+        const depSnap = await getDocs(depCol);
+
+        let deployed = { foot: 0, cav: 0, arch: 0 };
+        let basecampExisting = { foot: 0, cav: 0, arch: 0 };
+
+        depSnap.docs.forEach((d) => {
+          const data = d.data() as any;
+          const entry = {
+            foot: Number(data.foot ?? 0),
+            cav: Number(data.cav ?? 0),
+            arch: Number(data.arch ?? 0),
+          };
+
+          deployed.foot += entry.foot;
+          deployed.cav += entry.cav;
+          deployed.arch += entry.arch;
+
+          if (d.id === basecampTileId) {
+            basecampExisting = entry;
+          }
+        });
+
+        // Anything the player did not place goes automatically to the basecamp.
+        const remaining = {
+          foot: Math.max(0, startUnits.foot - deployed.foot),
+          cav: Math.max(0, startUnits.cav - deployed.cav),
+          arch: Math.max(0, startUnits.arch - deployed.arch),
+        };
+
+        const bcDepRef = doc(
+          db,
+          "games",
+          gameId,
+          "deployments",
+          p.id,
+          "tiles",
+          basecampTileId
+        );
+
+        await setDoc(
+          bcDepRef,
+          {
+            foot: basecampExisting.foot + remaining.foot,
+            cav: basecampExisting.cav + remaining.cav,
+            arch: basecampExisting.arch + remaining.arch,
+          },
+          { merge: true }
+        );
+
+        // Lock this player's start setup.
+        await setDoc(
+          pRef,
+          {
+            startReady: true,
+            startReadyAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+
+      // Only now make the game live.
+      await setDoc(
+        doc(db, "games", gameId),
+        {
+          status: "live",
+          startFinalized: true,
+          startedAt: serverTimestamp(),
+          lastFarmerPayoutAt: serverTimestamp(),
+          startClaim: {
+            active: false,
+          },
+        },
+        { merge: true }
+      );
+
+      alert("⚔️ Deployment finished. Horgoth begins!");
+    } catch (err: any) {
+      console.error("Failed to finalize start:", err);
+      autoFinalizeStartedRef.current = false;
+      alert(`❌ ${err?.message ?? String(err)}`);
+    }
+  }
+
+  // Automatically finalize when the 10-minute deployment timer expires.
+  useEffect(() => {
+    if (!startActive || startEndsAtMs === null) return;
+    if (nowMs < startEndsAtMs) return;
+    if (autoFinalizeStartedRef.current) return;
+
+    finalizeStartAndFillRemainder().catch((err) => {
+      console.error("Automatic start finalization failed:", err);
+      autoFinalizeStartedRef.current = false;
+    });
+    // finalizeStartAndFillRemainder intentionally uses the latest live state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startActive, startEndsAtMs, nowMs]);
 
   async function commitBatches(
   ops: Array<(batch: ReturnType<typeof writeBatch>) => void>,
@@ -1442,6 +1897,7 @@ bankSnap.docs.forEach((d) => {
     ops.push((batch) =>
       batch.update(d.ref, {
         ownerPlayerId: nextOwner,
+        farmers: deleteField(),
       })
     );
   });
@@ -1471,7 +1927,11 @@ bankSnap.docs.forEach((d) => {
     batch.set(
       gameRef,
       {
+        status: "lobby",
+        startFinalized: false,
         startClaim: { active: false },
+        startedAt: deleteField(),
+        lastFarmerPayoutAt: deleteField(),
       },
       { merge: true }
     )
@@ -1741,11 +2201,19 @@ return (
       </div>
 
       <div style={ui.headerRight}>
+        <button
+          onClick={enableHostAudio}
+          disabled={hostAudioEnabled}
+          style={hostAudioEnabled ? ui.buttonGhost : ui.button}
+          title="Enable central game audio on this Host device"
+        >
+          {hostAudioEnabled ? "🔊 Game audio ON" : "🔇 Enable game audio"}
+        </button>
         <div style={ui.pill}>
           Start phase: <strong>{startActive ? "ACTIVE" : "INACTIVE"}</strong>
         </div>
         <div style={ui.pill}>
-          Time left: <strong>{timeLeftSec === null ? "-" : `${timeLeftSec}s`}</strong>
+          Time left: <strong>{timeLeftDisplay}</strong>
         </div>
       </div>
     </div>
@@ -1879,6 +2347,7 @@ return (
                 colorForPlayer={colorForPlayer}
                 mageByTile={mageByTile}
                 selectedTileId={selectedTileId}
+                tieFighterPlayers={players}
                 onSelectTile={(id) => setSelectedTileId(id)}
               />
             </div>
@@ -2163,6 +2632,33 @@ return (
             );
           }
                     // ✅ Dragonglass / Mage logs
+          if (type === "FARMER_PURCHASE") {
+            const cost = Number((e as any).cost ?? 0);
+            const qty = Number((e as any).quantity ?? 0);
+            const tileId = String((e as any).tileId ?? "");
+            return (
+              <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                <strong>{who}</strong> bought 🌾 {qty} farmer{qty === 1 ? "" : "s"} on tile #{tileId} (-{cost} credits)
+              </li>
+            );
+          }
+
+          if (type === "FARMER_INCOME") {
+            const farmers = Number((e as any).farmers ?? 0);
+            const mins = Number((e as any).elapsedMinutes ?? 1);
+            const delta = Number((e as any).delta ?? 0);
+            const from = Number((e as any).from ?? 0);
+            const to = Number((e as any).to ?? from + delta);
+
+            return (
+              <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                <strong>{who}</strong> 🌾 farmer income: +{delta} credits
+                {" "}({farmers} farmer{farmers === 1 ? "" : "s"}
+                {mins > 1 ? ` × ${mins} min` : ""}; {from} → {to})
+              </li>
+            );
+          }
+
           if (type === "DRAGONGLASS_PURCHASE") {
             const cost = Number((e as any).cost ?? 0);
             return (
@@ -2401,12 +2897,15 @@ return (
 </div>
 </div>
 
-
-    {/* ===== Bottom: Host controls (unchanged) + Pregame under it ===== */}
+    {/* ===== Bottom: Host controls + Pregame under it ===== */}
     <div style={{ marginTop: 14, display: "grid", gap: 14 }}>
       {/* Host controls */}
       <div style={ui.card}>
         <div style={ui.cardTitle}>🧰 Host controls</div>
+
+        <div style={{ marginBottom: 10, fontSize: 13, opacity: 0.88 }}>
+          Game status: <strong>{gameStatus || "—"}</strong>
+        </div>
 
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <button onClick={initTiles} style={ui.button}>
@@ -2418,16 +2917,30 @@ return (
           </button>
 
           <button onClick={startStartTimer} style={ui.button}>
-            Start 2-min timer
+            ⏱️ Start 10-minute deployment
           </button>
 
           <button onClick={finalizeStartAndFillRemainder} style={ui.button}>
-            Finalize start + fill remainder
+            ⚔️ Start game now
           </button>
 
-          <button onClick={lockStartNow} style={ui.button}>
-            Lock start now
-          </button>
+          {(gameStatus === "live" || gameStatus === "playing") && (
+            <button onClick={pauseGame} style={ui.button}>
+              ⏸️ Pause game
+            </button>
+          )}
+
+          {gameStatus === "paused" && (
+            <button onClick={resumeGame} style={ui.button}>
+              ▶️ Resume game
+            </button>
+          )}
+
+          {gameStatus !== "finished" && (
+            <button onClick={endGame} style={ui.buttonDanger}>
+              🛑 End game
+            </button>
+          )}
 
           <button onClick={resetGame} style={ui.buttonDanger}>
             Reset game (clear troops + log)
@@ -2435,152 +2948,96 @@ return (
         </div>
       </div>
 
-      {/* Pregame setup moved below controls */}
+      {/* Pregame setup */}
       <div style={ui.card}>
-        <div style={ui.cardTitle}>⚙️ Pregame setup</div>
-        <div style={ui.helpText}>Vul hier de start credits/troepen/EXP in op basis van de pregame.</div>
-
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
-          <button onClick={savePregameSetup} style={ui.button}>
-            Save pregame setup
-          </button>
+        <div style={ui.cardTitle}>🏁 Destructo Truck Pregame</div>
+        <div style={ui.helpText}>
+          Select each player's final Destructo Truck ranking. Starting credits and troops are assigned automatically.
+          Dragonglass, Mage and the +1 EXP reward are shown as reminders only and are not added automatically.
         </div>
 
         <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
           {players.map((p) => {
-            const d = draft[p.id] ?? {
-              credits: 0,
-              foot: 0,
-              cav: 0,
-              arch: 0,
-              expFoot: 0,
-              expCav: 0,
-              expArch: 0,
-            };
+            const d = draft[p.id] ?? { pregameRank: "" };
+            const rank = Number(d.pregameRank);
+            const reward = rank >= 1 && rank <= 8 ? PREGAME_REWARDS[rank] : null;
 
             return (
               <div key={p.id} style={ui.playerCard}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                  }}
+                >
                   <strong style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                     <Avatar value={p.avatar} size={22} />
                     <span>{p.name}</span>
                   </strong>
 
-                  <span style={{ opacity: 0.8, fontSize: 12 }}>Player ID: {p.id}</span>
-                </div>
-
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
                   <label style={ui.smallLabel}>
-                    Credits
-                    <input
-                      type="number"
-                      value={d.credits}
-                      onChange={(e) =>
+                    Destructo Truck rank
+                    <select
+                      value={d.pregameRank}
+                      onChange={(e) => {
+                        const value = e.target.value;
+
                         setDraft((prev) => ({
                           ...prev,
-                          [p.id]: { ...prev[p.id], credits: Number(e.target.value) },
-                        }))
-                      }
+                          [p.id]: {
+                            pregameRank: value === "" ? "" : Number(value),
+                          },
+                        }));
+                      }}
                       style={ui.smallInput}
-                    />
-                  </label>
-
-                  <label style={ui.smallLabel}>
-                    Foot
-                    <input
-                      type="number"
-                      value={d.foot}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          [p.id]: { ...prev[p.id], foot: Number(e.target.value) },
-                        }))
-                      }
-                      style={ui.smallInput}
-                    />
-                  </label>
-
-                  <label style={ui.smallLabel}>
-                    Cav
-                    <input
-                      type="number"
-                      value={d.cav}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          [p.id]: { ...prev[p.id], cav: Number(e.target.value) },
-                        }))
-                      }
-                      style={ui.smallInput}
-                    />
-                  </label>
-
-                  <label style={ui.smallLabel}>
-                    Arch
-                    <input
-                      type="number"
-                      value={d.arch}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          [p.id]: { ...prev[p.id], arch: Number(e.target.value) },
-                        }))
-                      }
-                      style={ui.smallInput}
-                    />
-                  </label>
-
-                  <label style={ui.smallLabel}>
-                    EXP Foot
-                    <input
-                      type="number"
-                      min={0}
-                      value={d.expFoot}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          [p.id]: { ...prev[p.id], expFoot: Math.max(0, Number(e.target.value)) },
-                        }))
-                      }
-                      style={ui.smallInput}
-                    />
-                  </label>
-
-                  <label style={ui.smallLabel}>
-                    EXP Cav
-                    <input
-                      type="number"
-                      min={0}
-                      value={d.expCav}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          [p.id]: { ...prev[p.id], expCav: Math.max(0, Number(e.target.value)) },
-                        }))
-                      }
-                      style={ui.smallInput}
-                    />
-                  </label>
-
-                  <label style={ui.smallLabel}>
-                    EXP Arch
-                    <input
-                      type="number"
-                      min={0}
-                      value={d.expArch}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          [p.id]: { ...prev[p.id], expArch: Math.max(0, Number(e.target.value)) },
-                        }))
-                      }
-                      style={ui.smallInput}
-                    />
+                    >
+                      <option value="">Choose...</option>
+                      {Array.from({ length: 8 }, (_, i) => i + 1).map((rankOption) => (
+                        <option key={rankOption} value={rankOption}>
+                          #{rankOption}
+                        </option>
+                      ))}
+                    </select>
                   </label>
                 </div>
+
+                {reward && (
+                  <div style={{ marginTop: 10, fontSize: 13, opacity: 0.9 }}>
+                    💰 {reward.credits.toLocaleString()} credits
+                    {" · "}
+                    🪖 {reward.foot} Foot
+                    {" · "}
+                    🐎 {reward.cav} Cav
+                    {" · "}
+                    🏹 {reward.arch} Arch
+                    {reward.extra && (
+                      <>
+                        {" · "}
+                        🎁 <strong>{reward.extra}</strong>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: 12,
+            flexWrap: "wrap",
+            alignItems: "center",
+            marginTop: 14,
+          }}
+        >
+          <button onClick={savePregameSetup} style={ui.button}>
+            Save pregame setup
+          </button>
         </div>
       </div>
     </div>

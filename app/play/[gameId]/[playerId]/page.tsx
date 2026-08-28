@@ -1,3 +1,5 @@
+// PLAYER PAGE
+
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -25,6 +27,7 @@ type Tile = {
   ownerPlayerId: string | null;
   isBasecamp: boolean;
   basecampOwnerPlayerId?: string | null;
+  farmers?: number;
 };
 
 type PlayerDoc = {
@@ -32,6 +35,7 @@ type PlayerDoc = {
   avatar?: string;
   credits?: number;
   beerCount?: number;
+  tieFighters?: number;
 
   // you use these fields in the UI + logic
   hasMage?: boolean;
@@ -51,6 +55,8 @@ type Player = {
   id: string;
   name: string;
   avatar: string;
+  beerCount?: number;
+  tieFighters?: number;
 };
 
 type Troops = { foot: number; cav: number; arch: number };
@@ -107,7 +113,7 @@ export default function PlayPage() {
 
   const [selectedTileId, setSelectedTileId] = useState<string>("");
   const [mapPickMode, setMapPickMode] = useState<"FROM" | "TO">("FROM");
-  const [mapAction, setMapAction] = useState<"MOVE" | "TP">("MOVE");
+  const [mapAction, setMapAction] = useState<"MOVE" | "TP" | "AIRSTRIKE">("MOVE");
   const [tpPickMode, setTpPickMode] = useState<"TP_FROM" | "TP_TO">("TP_FROM");
 
   const [authReady, setAuthReady] = useState(false);
@@ -117,10 +123,22 @@ export default function PlayPage() {
   >({});
 
   const [status, setStatus] = useState<string>("");
+  const [gameStatus, setGameStatus] = useState<string>("");
   // ===== Ranking (from host published doc) =====
 const [myRank, setMyRank] = useState<number | null>(null);
 const [rankTotal, setRankTotal] = useState<number | null>(null);
 const [myDominance, setMyDominance] = useState<number | null>(null);
+const [rankingRows, setRankingRows] = useState<
+  Array<{
+    playerId: string;
+    rank: number;
+    dominance: number;
+    credits: number;
+    cav: number;
+    arch: number;
+    foot: number;
+  }>
+>([]);
 
     // ===== Dart reward (free archer) =====
   const [dartPlaceTileId, setDartPlaceTileId] = useState<string>("");
@@ -141,6 +159,14 @@ const [myDominance, setMyDominance] = useState<number | null>(null);
   const [buyCav, setBuyCav] = useState<number>(0);
   const [buyArch, setBuyArch] = useState<number>(0);
 
+  // ===== TIE Fighter / Airstrike =====
+  const TIE_FIGHTER_ATTACK_POWER = 8;
+  const [airstrikeTargetTileId, setAirstrikeTargetTileId] = useState<string>("");
+
+  // ===== Farmers =====
+  const [farmerTileId, setFarmerTileId] = useState<string>("");
+  const [buyFarmers, setBuyFarmers] = useState<number>(0);
+
     // ===== Mage =====
   const [mage, setMage] = useState<MageDoc | null>(null);
   const [magePlaceTileId, setMagePlaceTileId] = useState<string>("");
@@ -153,8 +179,10 @@ const [myDominance, setMyDominance] = useState<number | null>(null);
       foot: 1000,
       cav: 3000,
       arch: 3000,
+      farmer: 1000,
       mage: 10000, 
       dragonglass: 10000,
+      tieFighter: 20000,
     };
   }, []);
 
@@ -162,6 +190,11 @@ const [myDominance, setMyDominance] = useState<number | null>(null);
     Math.max(0, buyFoot) * SHOP_PRICES.foot +
     Math.max(0, buyCav) * SHOP_PRICES.cav +
     Math.max(0, buyArch) * SHOP_PRICES.arch;
+
+  const myTieFighters = Math.max(
+    0,
+    Math.floor(Number(player?.tieFighters ?? 0))
+  );
 
 
   // movement UI
@@ -236,6 +269,16 @@ useEffect(() => {
     return () => unsub();
   }, [gameId]);
 
+  // Game status listener: used to freeze the Player Page on pause/end.
+  useEffect(() => {
+    const ref = doc(db, "games", gameId);
+    const unsub = onSnapshot(ref, (snap) => {
+      const data = (snap.data() as any) ?? {};
+      setGameStatus(String(data?.status ?? ""));
+    });
+    return () => unsub();
+  }, [gameId]);
+
   useEffect(() => {
     const ref = doc(db, "games", gameId, "players", playerId);
     const unsub = onSnapshot(ref, (snap) => {
@@ -254,6 +297,7 @@ useEffect(() => {
       setMyRank(null);
       setRankTotal(null);
       setMyDominance(null);
+      setRankingRows([]);
       return;
     }
 
@@ -274,6 +318,20 @@ useEffect(() => {
         : Object.keys(ranking).length;
 
     setRankTotal(total || null);
+
+    const rows = Object.entries(ranking)
+      .map(([pid, r]) => ({
+        playerId: pid,
+        rank: Number(r?.rank ?? 999),
+        dominance: Number(r?.dominance ?? 0),
+        credits: Number(r?.credits ?? 0),
+        cav: Number(r?.cav ?? 0),
+        arch: Number(r?.arch ?? 0),
+        foot: Number(r?.foot ?? 0),
+      }))
+      .sort((a, b) => a.rank - b.rank);
+
+    setRankingRows(rows);
   });
 
   return () => unsub();
@@ -304,7 +362,7 @@ useEffect(() => {
   if (mapAction === "MOVE") {
     // bij MOVE volgen we FROM → TO
     setMapPickMode(fromTileId ? "TO" : "FROM");
-  } else {
+  } else if (mapAction === "TP") {
     // bij TELEPORT volgen we TP_FROM → TP_TO
     setTpPickMode(tpFromTileId ? "TP_TO" : "TP_FROM");
   }
@@ -460,6 +518,39 @@ useEffect(() => {
       .map((t) => t.id);
   }, [tiles, playerId]);
 
+  const farmerEligibleTiles = useMemo(() => {
+    return tiles.filter((t) => {
+      if (t.isBasecamp) return false;
+      if (t.ownerPlayerId !== playerId) return false;
+
+      const d = deployments[t.id] ?? { foot: 0, cav: 0, arch: 0 };
+      const troops =
+        Number(d.foot ?? 0) +
+        Number(d.cav ?? 0) +
+        Number(d.arch ?? 0);
+
+      return troops > 0;
+    });
+  }, [tiles, deployments, playerId]);
+
+  const myControlledFarmers = useMemo(() => {
+    return farmerEligibleTiles.reduce(
+      (sum, t) => sum + Math.max(0, Math.floor(Number(t.farmers ?? 0))),
+      0
+    );
+  }, [farmerEligibleTiles]);
+
+  const farmerIncomePerMinute = myControlledFarmers * 100;
+
+  const farmerPurchaseQty = Math.max(0, Math.floor(Number(buyFarmers) || 0));
+  const farmerPurchaseCost = farmerPurchaseQty * SHOP_PRICES.farmer;
+
+  useEffect(() => {
+    if (!farmerTileId) return;
+    const stillEligible = farmerEligibleTiles.some((t) => t.id === farmerTileId);
+    if (!stillEligible) setFarmerTileId("");
+  }, [farmerTileId, farmerEligibleTiles]);
+
   const fromTroops = deployments[fromTileId] ?? { foot: 0, cav: 0, arch: 0 };
 
  const highlightTileIds = useMemo(() => {
@@ -492,8 +583,20 @@ useEffect(() => {
     return [];
   }
 
+  // AIRSTRIKE: enemy owned tiles only, never a basecamp
+  if (mapAction === "AIRSTRIKE") {
+    return tiles
+      .filter(
+        (t) =>
+          !t.isBasecamp &&
+          !!t.ownerPlayerId &&
+          t.ownerPlayerId !== playerId
+      )
+      .map((t) => String(t.id));
+  }
+
   return [];
-}, [mapAction, mapPickMode, tpPickMode, fromTileId, ownedTileIds, tiles]);
+}, [mapAction, mapPickMode, tpPickMode, fromTileId, ownedTileIds, tiles, playerId]);
 
 
 
@@ -562,6 +665,14 @@ function labelForPlayer(p: Player) {
   return `${emoji ? emoji + " " : ""}${p.name}`;
 }
 
+function farmersControlledBy(pid: string) {
+  return tiles.reduce((sum, t) => {
+    if (t.ownerPlayerId !== pid) return sum;
+    if (t.isBasecamp) return sum;
+    return sum + Math.max(0, Math.floor(Number(t.farmers ?? 0)));
+  }, 0);
+}
+
 
   function Avatar({ value, size = 22 }: { value?: string; size?: number }) {
   const v = String(value ?? "🎲");
@@ -586,12 +697,6 @@ function labelForPlayer(p: Player) {
   return <span style={{ fontSize: Math.max(16, Math.floor(size * 0.9)) }}>{v}</span>;
 }
 
-
-    function playBattleAudio() {
-    const a = new Audio("/audio/battle.mp3");
-    a.volume = 0.8;
-    a.play().catch(() => {});
-  }
 
   async function bankAdjustCredits(delta: number) {
   setStatus("");
@@ -1166,7 +1271,6 @@ async function moveTroops() {
     setSelectedTileId("");
 
     if (didBattle) {
-      playBattleAudio();
       setStatus(uiMessage || "⚔️ Battle resolved.");
     } else {
       setStatus(`✅ Moved. Cost: ${cost} credits`);
@@ -1362,6 +1466,120 @@ async function moveTroops() {
 
 
 
+  async function buyAndPlaceFarmers() {
+    setStatus("");
+
+    const qty = Math.max(0, Math.floor(Number(buyFarmers) || 0));
+
+    if (qty <= 0) {
+      setStatus("❌ Choose at least 1 farmer to buy.");
+      return;
+    }
+
+    if (!farmerTileId) {
+      setStatus("❌ Choose a tile for your farmers.");
+      return;
+    }
+
+    const cost = qty * SHOP_PRICES.farmer;
+
+    const playerRef = doc(db, "games", gameId, "players", playerId);
+    const tileRef = doc(db, "games", gameId, "tiles", farmerTileId);
+    const depRef = doc(
+      db,
+      "games",
+      gameId,
+      "deployments",
+      playerId,
+      "tiles",
+      farmerTileId
+    );
+
+    setStatus("🌾 Buying farmers...");
+
+    try {
+      await runTransaction(db, async (tx) => {
+        // ===== READS FIRST =====
+        const pSnap = await tx.get(playerRef);
+        const tileSnap = await tx.get(tileRef);
+        const depSnap = await tx.get(depRef);
+
+        if (!pSnap.exists()) throw new Error("Player not found");
+        if (!tileSnap.exists()) throw new Error("Tile not found");
+
+        const pdata = pSnap.data() as any;
+        const tileData = tileSnap.data() as any;
+        const depData = (depSnap.exists() ? depSnap.data() : {}) as any;
+
+        const credits = Number(pdata?.credits ?? 0);
+
+        if (!!tileData.isBasecamp) {
+          throw new Error("Farmers cannot be placed on a basecamp.");
+        }
+
+        if ((tileData.ownerPlayerId ?? null) !== playerId) {
+          throw new Error("You can only place farmers on a tile you control.");
+        }
+
+        const troopsOnTile =
+          Number(depData.foot ?? 0) +
+          Number(depData.cav ?? 0) +
+          Number(depData.arch ?? 0);
+
+        if (troopsOnTile <= 0) {
+          throw new Error("A controlled tile needs at least 1 troop before farmers can be placed.");
+        }
+
+        if (credits < cost) {
+          throw new Error("Not enough credits");
+        }
+
+        const curFarmers = Math.max(
+          0,
+          Math.floor(Number(tileData.farmers ?? 0))
+        );
+
+        // ===== WRITES =====
+        tx.update(playerRef, {
+          credits: credits - cost,
+        });
+
+        tx.update(tileRef, {
+          farmers: curFarmers + qty,
+        });
+
+        const logRef = doc(collection(db, "games", gameId, "bankLog"));
+        tx.set(
+          logRef,
+          {
+            createdAt: serverTimestamp(),
+            type: "FARMER_PURCHASE",
+            playerId,
+            tileId: farmerTileId,
+            quantity: qty,
+            farmerFrom: curFarmers,
+            farmerTo: curFarmers + qty,
+            cost,
+            from: credits,
+            to: credits - cost,
+            delta: -cost,
+          },
+          { merge: true }
+        );
+      });
+
+      const placedTile = farmerTileId;
+      setBuyFarmers(0);
+      setStatus(
+        `🌾✅ ${qty} farmer${qty === 1 ? "" : "s"} placed on tile #${placedTile}. Cost: ${cost} credits.`
+      );
+    } catch (err: any) {
+      console.error(err);
+      setStatus(`❌ ${err?.message ?? String(err)}`);
+    }
+  }
+
+
     async function buyTroopsToBasecamp() {
     setStatus("");
 
@@ -1440,6 +1658,263 @@ async function moveTroops() {
       setStatus(`❌ ${err?.message ?? String(err)}`);
     }
   }
+
+    async function buyTieFighter() {
+  setStatus("");
+
+  const playerRef = doc(db, "games", gameId, "players", playerId);
+  const cost = SHOP_PRICES.tieFighter;
+
+  try {
+    await runTransaction(db, async (tx) => {
+      const pSnap = await tx.get(playerRef);
+      if (!pSnap.exists()) throw new Error("Player not found");
+
+      const pdata = pSnap.data() as any;
+      const credits = Number(pdata?.credits ?? 0);
+      const current = Math.max(0, Math.floor(Number(pdata?.tieFighters ?? 0)));
+
+      if (credits < cost) throw new Error("Not enough credits");
+
+      tx.update(playerRef, {
+        credits: credits - cost,
+        tieFighters: current + 1,
+      });
+
+      const logRef = doc(collection(db, "games", gameId, "bankLog"));
+      tx.set(
+        logRef,
+        {
+          createdAt: serverTimestamp(),
+          type: "TIE_FIGHTER_PURCHASE",
+          playerId,
+          quantity: 1,
+          tieFightersFrom: current,
+          tieFightersTo: current + 1,
+          cost,
+          from: credits,
+          to: credits - cost,
+          delta: -cost,
+        },
+        { merge: true }
+      );
+    });
+
+    setStatus(`✈️ TIE Fighter purchased for ${cost} credits.`);
+  } catch (err: any) {
+    console.error(err);
+    setStatus(`❌ ${err?.message ?? String(err)}`);
+  }
+}
+
+async function launchTieFighterAirstrike() {
+  setStatus("");
+
+  const tileId = String(airstrikeTargetTileId || "");
+  if (!tileId) {
+    setStatus("❌ Choose an enemy tile for the airstrike.");
+    return;
+  }
+
+  const playerRef = doc(db, "games", gameId, "players", playerId);
+  const tileRef = doc(db, "games", gameId, "tiles", tileId);
+
+  let resultMessage = "";
+
+  try {
+    await runTransaction(db, async (tx) => {
+      // ===== READS FIRST =====
+      const pSnap = await tx.get(playerRef);
+      const tileSnap = await tx.get(tileRef);
+
+      if (!pSnap.exists()) throw new Error("Player not found");
+      if (!tileSnap.exists()) throw new Error("Target tile not found");
+
+      const pdata = pSnap.data() as any;
+      const tileData = tileSnap.data() as any;
+
+      const currentTieFighters = Math.max(
+        0,
+        Math.floor(Number(pdata?.tieFighters ?? 0))
+      );
+
+      if (currentTieFighters <= 0) {
+        throw new Error("You do not own a TIE Fighter");
+      }
+
+      const defenderId = String(tileData?.ownerPlayerId ?? "");
+      const isBasecamp = !!tileData?.isBasecamp;
+
+      if (isBasecamp) {
+        throw new Error("A basecamp cannot be targeted by an airstrike");
+      }
+
+      if (!defenderId) {
+        throw new Error("You can only airstrike an enemy-controlled tile");
+      }
+
+      if (defenderId === playerId) {
+        throw new Error("You cannot airstrike your own tile");
+      }
+
+      const defRef = doc(
+        db,
+        "games",
+        gameId,
+        "deployments",
+        defenderId,
+        "tiles",
+        tileId
+      );
+      const defPlayerRef = doc(
+        db,
+        "games",
+        gameId,
+        "players",
+        defenderId
+      );
+      const defMageRef = doc(
+        db,
+        "games",
+        gameId,
+        "mages",
+        defenderId
+      );
+
+      const defSnap = await tx.get(defRef);
+      const defPlayerSnap = await tx.get(defPlayerRef);
+      const defMageSnap = await tx.get(defMageRef);
+
+      const defData = (defSnap.exists() ? defSnap.data() : {}) as any;
+      const defPlayerData = (defPlayerSnap.exists()
+        ? defPlayerSnap.data()
+        : {}) as any;
+
+      const before: Troops = {
+        foot: Math.max(0, Math.floor(Number(defData?.foot ?? 0))),
+        cav: Math.max(0, Math.floor(Number(defData?.cav ?? 0))),
+        arch: Math.max(0, Math.floor(Number(defData?.arch ?? 0))),
+      };
+
+      const defExp = {
+        foot: Math.max(
+          0,
+          Math.floor(Number(defPlayerData?.exp?.foot ?? 0))
+        ),
+        cav: Math.max(
+          0,
+          Math.floor(Number(defPlayerData?.exp?.cav ?? 0))
+        ),
+        arch: Math.max(
+          0,
+          Math.floor(Number(defPlayerData?.exp?.arch ?? 0))
+        ),
+      };
+
+      const defenderPower =
+        (before.foot * defExp.foot) / 3 +
+        (before.cav * defExp.cav) / 3 +
+        (before.arch * defExp.arch) / 3;
+
+      const attackPower = TIE_FIGHTER_ATTACK_POWER;
+      const diff = attackPower - defenderPower;
+      const margin = Math.abs(diff);
+
+      let after: Troops;
+
+      // A TIE win or exact draw wipes the defenders.
+      // If the defender is stronger, use the same defender-survivor rule
+      // as normal ground combat to determine how much damage the strike did.
+      if (attackPower >= defenderPower) {
+        after = { foot: 0, cav: 0, arch: 0 };
+      } else {
+        after = applyWinnerSurvivors(
+          before,
+          defenderWinDivisor(margin)
+        );
+      }
+
+      const survivorsTotal =
+        after.foot + after.cav + after.arch;
+
+      const mageOnTarget =
+        defMageSnap.exists() &&
+        String((defMageSnap.data() as any)?.tileId ?? "") === tileId;
+
+      // ===== WRITES =====
+      tx.update(playerRef, {
+        tieFighters: currentTieFighters - 1,
+      });
+
+      tx.set(defRef, after, { merge: true });
+
+      if (survivorsTotal <= 0) {
+        // Airstrike never gives ownership to the attacker.
+        // A completely wiped tile simply becomes neutral.
+        tx.update(tileRef, {
+          ownerPlayerId: null,
+        });
+
+        if (mageOnTarget) {
+          tx.delete(defMageRef);
+
+          if (defPlayerSnap.exists()) {
+            tx.update(defPlayerRef, {
+              hasMage: false,
+            });
+          }
+        }
+      }
+
+      const logRef = doc(
+        collection(db, "games", gameId, "battleLog")
+      );
+
+      tx.set(
+        logRef,
+        {
+          createdAt: serverTimestamp(),
+          type: "AIRSTRIKE",
+          tileId,
+          attackerId: playerId,
+          defenderId,
+          winnerId: survivorsTotal <= 0 ? null : defenderId,
+          attackPower,
+          defenderPower,
+          diff,
+          margin,
+          before,
+          after,
+          neutralized: survivorsTotal <= 0,
+          tieFightersFrom: currentTieFighters,
+          tieFightersTo: currentTieFighters - 1,
+          mageDestroyed: mageOnTarget && survivorsTotal <= 0,
+        },
+        { merge: true }
+      );
+
+      const destroyed = {
+        foot: before.foot - after.foot,
+        cav: before.cav - after.cav,
+        arch: before.arch - after.arch,
+      };
+
+      resultMessage =
+        survivorsTotal <= 0
+          ? `💥 Airstrike on tile #${tileId}: all defenders destroyed — tile is now neutral. TIE Fighter lost.`
+          : `✈️ Airstrike on tile #${tileId}: destroyed ${destroyed.foot} Foot, ${destroyed.cav} Cav, ${destroyed.arch} Arch. TIE Fighter lost.`;
+    });
+
+    setAirstrikeTargetTileId("");
+    setSelectedTileId("");
+    // Airstrike audio is played centrally by the Host page.
+    // Do not play the normal local battle/victory sound for an airstrike.
+    setStatus(resultMessage || "✈️ Airstrike resolved.");
+  } catch (err: any) {
+    console.error(err);
+    setStatus(`❌ ${err?.message ?? String(err)}`);
+  }
+}
 
     async function buyDragonglass() {
   setStatus("");
@@ -2187,7 +2662,6 @@ async function teleportMoveWithMage() {
     setTpArch(0);
 
     if (didBattle) {
-      playBattleAudio();
       setStatus(uiMessage || "🧙⚔️ Teleport battle resolved.");
     } else {
       setStatus(`🧙 Teleport moved. Cost: ${cost} credits`);
@@ -2279,7 +2753,182 @@ const ui = {
 
 // UI block
 return (
-  <main style={ui.page}>
+  <main style={{ ...ui.page, position: "relative" }}>
+    {(gameStatus === "paused" || gameStatus === "finished") && (
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 9999,
+          background: "rgba(10,8,5,0.90)",
+          backdropFilter: "blur(4px)",
+          overflowY: "auto",
+          padding: 24,
+        }}
+      >
+        <div
+          style={{
+            maxWidth: 720,
+            width: "100%",
+            margin: "30px auto",
+            border: "1px solid rgba(243,231,207,0.30)",
+            borderRadius: 18,
+            padding: 28,
+            background: "#1f1a12",
+            color: "#f3e7cf",
+            boxShadow: "0 20px 70px rgba(0,0,0,0.55)",
+          }}
+        >
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 42, marginBottom: 6 }}>
+              {gameStatus === "paused" ? "⏸️" : "🏁"}
+            </div>
+
+            <h2 style={{ margin: 0 }}>
+              {gameStatus === "paused" ? "CURRENT RANKING" : "FINAL RANKING"}
+            </h2>
+
+            <div
+              style={{
+                marginTop: 14,
+                fontSize: 13,
+                opacity: 0.76,
+              }}
+            >
+              {gameStatus === "paused" ? "Your current position" : "Your final position"}
+            </div>
+
+            <div
+              style={{
+                marginTop: 4,
+                fontSize: 32,
+                fontWeight: 900,
+              }}
+            >
+              {myRank ? `#${myRank}` : "—"}
+              {rankTotal ? ` / ${rankTotal}` : ""}
+            </div>
+          </div>
+
+          <div style={{ marginTop: 22 }}>
+            {rankingRows.length === 0 ? (
+              <div
+                style={{
+                  padding: 14,
+                  borderRadius: 12,
+                  border: "1px solid rgba(243,231,207,0.16)",
+                  background: "rgba(0,0,0,0.12)",
+                  opacity: 0.78,
+                }}
+              >
+                Ranking is not available yet.
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: 8 }}>
+                {rankingRows.map((r) => {
+                  const p = players.find((x) => x.id === r.playerId);
+                  const isMe = r.playerId === playerId;
+
+                  const medal =
+                    r.rank === 1
+                      ? "🥇"
+                      : r.rank === 2
+                      ? "🥈"
+                      : r.rank === 3
+                      ? "🥉"
+                      : "";
+
+                  return (
+                    <div
+                      key={r.playerId}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "54px 1fr auto",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "10px 12px",
+                        borderRadius: 12,
+                        border: isMe
+                          ? "1px solid rgba(243,231,207,0.45)"
+                          : "1px solid rgba(243,231,207,0.14)",
+                        background: isMe
+                          ? "rgba(243,231,207,0.10)"
+                          : "rgba(0,0,0,0.10)",
+                      }}
+                    >
+                      <div style={{ fontWeight: 800 }}>
+                        {medal || `#${r.rank}`}
+                      </div>
+
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 9,
+                          minWidth: 0,
+                        }}
+                      >
+                        <Avatar value={p?.avatar} size={24} />
+                        <div style={{ minWidth: 0 }}>
+                          <div
+                            style={{
+                              fontWeight: isMe ? 800 : 650,
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                          >
+                            {p?.name ?? r.playerId}
+                            {isMe ? " (you)" : ""}
+                          </div>
+
+                          <div
+                            style={{
+                              marginTop: 3,
+                              fontSize: 11,
+                              opacity: 0.72,
+                            }}
+                          >
+                            🗺️ {r.dominance.toFixed(1)}% · 💰 {r.credits} · 🐎 {r.cav} · 🏹 {r.arch} · 🗡️ {r.foot}
+                            {" · "}🌾 {farmersControlledBy(r.playerId)}
+                            {" · "}🍺 {Number(p?.beerCount ?? 0)}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 700,
+                          opacity: 0.9,
+                        }}
+                      >
+                        #{r.rank}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div
+            style={{
+              marginTop: 14,
+              textAlign: "center",
+              fontSize: 13,
+              opacity: 0.74,
+              lineHeight: 1.5,
+            }}
+          >
+            {gameStatus === "paused"
+              ? "Waiting for the host to resume the game…"
+              : `Game ${gameId} · ${player?.name ?? playerId}`}
+          </div>
+        </div>
+      </div>
+    )}
+
     {/* Header */}
     <div style={ui.header}>
       <div>
@@ -2298,6 +2947,9 @@ return (
           </div>
         <div style={ui.chip}>
           Credits: <strong>{Number(player?.credits ?? 0)}</strong>
+        </div>
+        <div style={ui.chip}>
+          Game: <strong>{gameStatus || "—"}</strong>
         </div>
         <div>
             Ranking:{" "}
@@ -2322,12 +2974,20 @@ return (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
           <h2 style={ui.cardTitle}>World Map</h2>
           <div style={{ fontSize: 12, opacity: 0.75 }}>
-            🗺️ Klik tiles om FROM/TO (Move) of TP_FROM/TP_TO (Teleport) te kiezen
+            {mapAction === "AIRSTRIKE"
+              ? "✈️ Select an enemy non-basecamp tile for your airstrike"
+              : "🗺️ Klik tiles om FROM/TO (Move) of TP_FROM/TP_TO (Teleport) te kiezen"}
           </div>
         </div>
 
         <div style={{ textAlign: "center", marginBottom: 8, fontSize: 12, opacity: 0.9 }}>
-          🗺️ Klik op de map: <b>{mapPickMode === "FROM" ? "kies FROM" : "kies TO"}</b>
+          {mapAction === "AIRSTRIKE" ? (
+            <>✈️ Airstrike mode: <b>choose target</b></>
+          ) : mapAction === "TP" ? (
+            <>🧙 Teleport: <b>{tpPickMode === "TP_FROM" ? "kies TP FROM" : "kies TP TO"}</b></>
+          ) : (
+            <>🗺️ Klik op de map: <b>{mapPickMode === "FROM" ? "kies FROM" : "kies TO"}</b></>
+          )}
         </div>
 
         <MapSvg
@@ -2337,6 +2997,7 @@ return (
           mageByTile={mageByTile as any}
           selectedTileId={selectedTileId}
           highlightTileIds={highlightTileIds}
+          tieFighterPlayers={players}
           onSelectTile={(rawId) => {
             const id = String(rawId);
             setSelectedTileId(id);
@@ -2414,6 +3075,42 @@ return (
 
               setTpToTileId(id);
               setStatus(`✅ TP TO gekozen: tile #${id}. Klaar om te teleporteren.`);
+              return;
+            }
+
+            // ====== AIRSTRIKE flow ======
+            if (mapAction === "AIRSTRIKE") {
+              if (myTieFighters <= 0) {
+                setStatus("❌ You do not own a TIE Fighter.");
+                return;
+              }
+
+              const t = tiles.find((x) => String(x.id) === id);
+
+              if (!t) {
+                setStatus("❌ Tile not found.");
+                return;
+              }
+
+              if (t.isBasecamp) {
+                setStatus("❌ A basecamp cannot be targeted by an airstrike.");
+                return;
+              }
+
+              if (!t.ownerPlayerId) {
+                setStatus("❌ You can only target an enemy-controlled tile.");
+                return;
+              }
+
+              if (t.ownerPlayerId === playerId) {
+                setStatus("❌ You cannot airstrike your own tile.");
+                return;
+              }
+
+              setAirstrikeTargetTileId(id);
+              setStatus(
+                `✈️ Airstrike target selected: tile #${id} (${nameFor(t.ownerPlayerId)}). Confirm launch below.`
+              );
               return;
             }
           }}
@@ -2500,6 +3197,19 @@ return (
                       (e as any).attackerId === playerId
                         ? `You attacked tile #${e.tileId} from ${defender} — DRAW. Both armies destroyed.`
                         : `You were attacked on tile #${e.tileId} by ${attacker} — DRAW. Both armies destroyed.`;
+                  } else if (e.type === "AIRSTRIKE") {
+                    const attacker = nameFor((e as any).attackerId);
+                    const defender = nameFor((e as any).defenderId);
+                    const neutralized = !!(e as any).neutralized;
+
+                    text =
+                      (e as any).attackerId === playerId
+                        ? `You launched an airstrike on ${defender} at tile #${e.tileId}${
+                            neutralized ? " — all defenders destroyed, tile neutralized." : "."
+                          }`
+                        : `${attacker} launched an airstrike on you at tile #${e.tileId}${
+                            neutralized ? " — all defenders destroyed, tile neutralized." : "."
+                          }`;
                   } else {
                     text = `Event on tile #${(e as any).tileId}`;
                   }
@@ -2711,6 +3421,139 @@ return (
           </button>
         </section>
 
+        {/* TIE Fighter */}
+        <section style={{ ...ui.card, marginTop: 14 }}>
+          <h2 style={ui.cardTitle}>✈️ TIE Fighter</h2>
+
+          <div style={{ marginBottom: 8, opacity: 0.88 }}>
+            Cost: <strong>{SHOP_PRICES.tieFighter}</strong> credits
+          </div>
+
+          <div style={{ marginBottom: 8 }}>
+            Available: <strong>{myTieFighters}</strong>
+          </div>
+
+          <div style={{ marginBottom: 10, fontSize: 13, opacity: 0.8, lineHeight: 1.5 }}>
+            A TIE Fighter has <strong>{TIE_FIGHTER_ATTACK_POWER} attack power</strong> and can perform
+            one suicide airstrike on an enemy non-basecamp tile. It cannot be destroyed before use.
+          </div>
+
+          <button
+            type="button"
+            onClick={buyTieFighter}
+            style={{ ...ui.button, width: "fit-content" }}
+          >
+            ✈️ Buy TIE Fighter
+          </button>
+        </section>
+
+        {/* Farmers */}
+        <section style={{ ...ui.card, marginTop: 14 }}>
+          <h2 style={ui.cardTitle}>🌾 Farmers</h2>
+
+          <div style={{ marginBottom: 8, opacity: 0.88 }}>
+            Farmers cost <strong>{SHOP_PRICES.farmer}</strong> credits each and generate{" "}
+            <strong>100 credits per minute</strong> for whoever controls their tile.
+          </div>
+
+          <div style={{ marginBottom: 10, fontSize: 13, opacity: 0.8 }}>
+            Farmers cannot be moved, do not fight, cannot die, and cannot be placed on a basecamp.
+            If you lose the tile, the farmers stay there and serve the new ruler.
+          </div>
+
+          <div
+            style={{
+              marginBottom: 12,
+              padding: 10,
+              borderRadius: 12,
+              border: "1px solid rgba(243,231,207,0.16)",
+              background: "rgba(0,0,0,0.10)",
+            }}
+          >
+            🌾 Farmers currently under your rule: <strong>{myControlledFarmers}</strong>
+            <br />
+            💰 Current farmer income: <strong>+{farmerIncomePerMinute}/min</strong>
+          </div>
+
+          <label style={{ fontSize: 12 }}>
+            Place on (your controlled tile with at least 1 troop, no basecamp)
+            <br />
+            <select
+              value={farmerTileId}
+              onChange={(e) => setFarmerTileId(e.target.value)}
+              style={{
+                padding: 10,
+                width: "100%",
+                borderRadius: 12,
+                border: "1px solid rgba(243,231,207,0.18)",
+                background: "rgba(0,0,0,0.18)",
+                color: "#f3e7cf",
+              }}
+            >
+              <option value="">— choose —</option>
+              {farmerEligibleTiles.map((t) => {
+                const d = deployments[t.id] ?? { foot: 0, cav: 0, arch: 0 };
+                const farmers = Math.max(0, Math.floor(Number(t.farmers ?? 0)));
+
+                return (
+                  <option key={t.id} value={t.id}>
+                    #{t.id} — 🌾{farmers} (🗡️{d.foot ?? 0} 🐎{d.cav ?? 0} 🏹{d.arch ?? 0})
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+
+          {farmerEligibleTiles.length === 0 ? (
+            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
+              You currently have no non-basecamp tile with troops where farmers can be placed.
+            </div>
+          ) : null}
+
+          <label style={{ fontSize: 12, display: "block", marginTop: 10 }}>
+            Number of farmers
+            <br />
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={buyFarmers}
+              onChange={(e) => setBuyFarmers(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+              style={{
+                width: 110,
+                padding: 8,
+                borderRadius: 10,
+                border: "1px solid rgba(243,231,207,0.18)",
+                background: "rgba(0,0,0,0.18)",
+                color: "#f3e7cf",
+              }}
+            />
+          </label>
+
+          <div style={{ marginTop: 10 }}>
+            Cost: <strong>{farmerPurchaseCost}</strong> credits
+          </div>
+
+          <div style={{ marginTop: 4, fontSize: 12, opacity: 0.78 }}>
+            Added income if you still control this tile:{" "}
+            <strong>+{farmerPurchaseQty * 100}/min</strong>
+          </div>
+
+          <button
+            onClick={buyAndPlaceFarmers}
+            disabled={!farmerTileId || farmerPurchaseQty <= 0}
+            style={{
+              ...ui.button,
+              marginTop: 10,
+              width: "fit-content",
+              cursor: !farmerTileId || farmerPurchaseQty <= 0 ? "not-allowed" : "pointer",
+              opacity: !farmerTileId || farmerPurchaseQty <= 0 ? 0.6 : 1,
+            }}
+          >
+            🌾 Buy & Place Farmers
+          </button>
+        </section>
+
         {/* Dragonglass */}
         <section style={{ ...ui.card, marginTop: 14 }}>
           <h2 style={ui.cardTitle}>Special: Dragonglass</h2>
@@ -2890,6 +3733,10 @@ return (
             </div>
 
             <div>
+              ✈️ <strong>TIE Fighters:</strong> {myTieFighters}
+            </div>
+
+            <div>
               🍺 <strong>Beercules:</strong> {Number(player?.beerCount ?? 0)}
             </div>
 
@@ -2915,6 +3762,7 @@ return (
               type="button"
               onClick={() => {
                 setMapAction("MOVE");
+                setAirstrikeTargetTileId("");
                 setStatus("🗺️ Map klikmodus: MOVE (FROM → TO)");
               }}
               style={{
@@ -2929,6 +3777,7 @@ return (
               type="button"
               onClick={() => {
                 setMapAction("TP");
+                setAirstrikeTargetTileId("");
                 setStatus("🗺️ Map klikmodus: TELEPORT (TP FROM → TP TO)");
               }}
               style={{
@@ -2938,7 +3787,86 @@ return (
             >
               🧙 Teleport
             </button>
+
+            <button
+              type="button"
+              disabled={myTieFighters <= 0}
+              onClick={() => {
+                setMapAction("AIRSTRIKE");
+                setFromTileId("");
+                setToTileId("");
+                setTpFromTileId("");
+                setTpToTileId("");
+                setSelectedTileId("");
+                setAirstrikeTargetTileId("");
+                setStatus("✈️ AIRSTRIKE mode: choose an enemy non-basecamp tile.");
+              }}
+              style={{
+                ...ui.button,
+                background:
+                  mapAction === "AIRSTRIKE"
+                    ? "rgba(243,231,207,0.16)"
+                    : "rgba(243,231,207,0.07)",
+                cursor: myTieFighters <= 0 ? "not-allowed" : "pointer",
+                opacity: myTieFighters <= 0 ? 0.55 : 1,
+              }}
+            >
+              ✈️ Airstrike ({myTieFighters})
+            </button>
           </div>
+
+          {mapAction === "AIRSTRIKE" && (
+            <div
+              style={{
+                marginTop: 12,
+                padding: 10,
+                borderRadius: 12,
+                border: "1px solid rgba(243,231,207,0.16)",
+                background: "rgba(0,0,0,0.12)",
+              }}
+            >
+              <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+                Attack power: <strong>{TIE_FIGHTER_ATTACK_POWER}</strong>
+                {" · "}
+                TIE Fighters available: <strong>{myTieFighters}</strong>
+              </div>
+
+              <div style={{ marginTop: 6, fontSize: 13 }}>
+                Target:{" "}
+                <strong>
+                  {airstrikeTargetTileId
+                    ? `Tile #${airstrikeTargetTileId}`
+                    : "— choose on map —"}
+                </strong>
+              </div>
+
+              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.78 }}>
+                A TIE Fighter is always destroyed after the strike. The airstrike can never capture a tile.
+                If all defenders die, the tile becomes neutral.
+              </div>
+
+              <button
+                type="button"
+                onClick={launchTieFighterAirstrike}
+                disabled={!airstrikeTargetTileId || myTieFighters <= 0}
+                style={{
+                  ...ui.button,
+                  marginTop: 10,
+                  width: "fit-content",
+                  cursor:
+                    !airstrikeTargetTileId || myTieFighters <= 0
+                      ? "not-allowed"
+                      : "pointer",
+                  opacity:
+                    !airstrikeTargetTileId || myTieFighters <= 0
+                      ? 0.55
+                      : 1,
+                }}
+              >
+                💥 Launch airstrike
+              </button>
+            </div>
+          )}
         </section>
 
         {/* Troop movement (moved up directly under Map mode) */}
