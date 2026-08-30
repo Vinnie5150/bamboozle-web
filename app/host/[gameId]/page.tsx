@@ -167,8 +167,10 @@ export default function HostPage() {
   // ===== Farmers: automatic income =====
   const [gameStatus, setGameStatus] = useState<string>("");
   const farmerPayoutInFlightRef = useRef(false);
-  const FARMER_INCOME_PER_MINUTE = 100;
-  const FARMER_PAYOUT_MS = 60 * 1000;
+  // PRACTICE MODE: farmers pay once per full day.
+  // For the real game, change these values back to 100 credits / 60 * 1000 ms.
+  const FARMER_INCOME_PER_DAY = 100;
+  const FARMER_PAYOUT_MS = 24 * 60 * 60 * 1000;
 
   const [magesByPlayer, setMagesByPlayer] = useState<Record<string, { tileId: string } | null>>(
     {}
@@ -558,8 +560,8 @@ useEffect(() => {
           return;
         }
 
-        const elapsedMinutes = Math.floor((nowMs - lastMs) / FARMER_PAYOUT_MS);
-        if (elapsedMinutes <= 0) return;
+        const elapsedDays = Math.floor((nowMs - lastMs) / FARMER_PAYOUT_MS);
+        if (elapsedDays <= 0) return;
 
         // ----- READ ALL TILES -----
         const tileSnaps = [];
@@ -600,10 +602,10 @@ useEffect(() => {
           playerSnaps.push({ playerId: ownerId, ref: playerRef, snap: pSnap });
         }
 
-        // Move the payout marker by full minutes only.
-        // This preserves the leftover seconds instead of drifting over time.
+        // Move the payout marker by full days only.
+        // This preserves the leftover time instead of drifting over time.
         const nextPayoutMs =
-          lastMs + elapsedMinutes * FARMER_PAYOUT_MS;
+          lastMs + elapsedDays * FARMER_PAYOUT_MS;
 
         // ----- WRITES -----
         tx.set(
@@ -622,8 +624,8 @@ useEffect(() => {
 
           const income =
             farmers *
-            FARMER_INCOME_PER_MINUTE *
-            elapsedMinutes;
+            FARMER_INCOME_PER_DAY *
+            elapsedDays;
 
           const pdata = row.snap.data() as any;
           const creditsBefore = Number(pdata?.credits ?? 0);
@@ -641,8 +643,8 @@ useEffect(() => {
               type: "FARMER_INCOME",
               playerId: row.playerId,
               farmers,
-              elapsedMinutes,
-              incomePerFarmerPerMinute: FARMER_INCOME_PER_MINUTE,
+              elapsedDays,
+              incomePerFarmerPerDay: FARMER_INCOME_PER_DAY,
               delta: income,
               from: creditsBefore,
               to: creditsAfter,
@@ -658,7 +660,7 @@ useEffect(() => {
     }
   }
 
-  // Check regularly; the transaction itself only pays when a full minute elapsed.
+  // Practice mode: check occasionally; the transaction itself only pays when a full day elapsed.
   // The Firestore payout marker prevents duplicate payments, even with two host tabs.
   useEffect(() => {
     if (gameStatus !== "live" && gameStatus !== "playing") return;
@@ -671,7 +673,7 @@ useEffect(() => {
       processFarmerPayout().catch((err) =>
         console.error("Automatic farmer payout check failed:", err)
       );
-    }, 5000);
+    }, 5 * 60 * 1000);
 
     return () => window.clearInterval(timer);
 
@@ -2626,9 +2628,11 @@ return (
             const icon = unitType === "foot" ? "🗡️" : unitType === "cav" ? "🐎" : unitType === "arch" ? "🏹" : "⚔️";
             const tileId = String((e as any).tileId ?? "?");
             const refund = Number((e as any).refund ?? 0);
+            const tileNeutralized = (e as any).tileNeutralized === true;
             return (
               <li key={(e as any).id} style={{ marginBottom: 6 }}>
                 <strong>{who}</strong>: 🏃 {icon} deserter left tile #{tileId} (+{refund} credits)
+                {tileNeutralized ? " — tile became neutral" : ""}
               </li>
             );
           }
@@ -2670,7 +2674,7 @@ return (
 
           if (type === "FARMER_INCOME") {
             const farmers = Number((e as any).farmers ?? 0);
-            const mins = Number((e as any).elapsedMinutes ?? 1);
+            const days = Number((e as any).elapsedDays ?? 1);
             const delta = Number((e as any).delta ?? 0);
             const from = Number((e as any).from ?? 0);
             const to = Number((e as any).to ?? from + delta);
@@ -2679,7 +2683,7 @@ return (
               <li key={(e as any).id} style={{ marginBottom: 6 }}>
                 <strong>{who}</strong> 🌾 farmer income: +{delta} credits
                 {" "}({farmers} farmer{farmers === 1 ? "" : "s"}
-                {mins > 1 ? ` × ${mins} min` : ""}; {from} → {to})
+                {days > 1 ? ` × ${days} days` : ""} per day; {from} → {to})
               </li>
             );
           }

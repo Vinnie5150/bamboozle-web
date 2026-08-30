@@ -552,7 +552,7 @@ useEffect(() => {
     );
   }, [farmerEligibleTiles]);
 
-  const farmerIncomePerMinute = myControlledFarmers * 100;
+  const farmerIncomePerDay = myControlledFarmers * 100;
 
   const farmerPurchaseQty = Math.max(0, Math.floor(Number(buyFarmers) || 0));
   const farmerPurchaseCost = farmerPurchaseQty * SHOP_PRICES.farmer;
@@ -3670,7 +3670,7 @@ return (
 
           <div style={{ marginBottom: 8, opacity: 0.88 }}>
             Farmers cost <strong>{SHOP_PRICES.farmer}</strong> credits each and generate{" "}
-            <strong>100 credits per minute</strong> for whoever controls their tile.
+            <strong>100 credits per day</strong> for whoever controls their tile.
           </div>
 
           <div style={{ marginBottom: 10, fontSize: 13, opacity: 0.8 }}>
@@ -3689,7 +3689,7 @@ return (
           >
             🌾 Farmers currently under your rule: <strong>{myControlledFarmers}</strong>
             <br />
-            💰 Current farmer income: <strong>+{farmerIncomePerMinute}/min</strong>
+            💰 Current farmer income: <strong>+{farmerIncomePerDay}/day</strong>
           </div>
 
           <label style={{ fontSize: 12 }}>
@@ -3753,7 +3753,7 @@ return (
 
           <div style={{ marginTop: 4, fontSize: 12, opacity: 0.78 }}>
             Added income if you still control this tile:{" "}
-            <strong>+{farmerPurchaseQty * 100}/min</strong>
+            <strong>+{farmerPurchaseQty * 100}/day</strong>
           </div>
 
           <button
