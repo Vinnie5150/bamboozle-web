@@ -176,15 +176,27 @@ const [rankingRows, setRankingRows] = useState<
 
   const SHOP_PRICES = useMemo(() => {
     return {
-      foot: 1000,
-      cav: 3000,
-      arch: 3000,
+      foot: 2000,
+      cav: 5000,
+      arch: 5000,
       farmer: 1000,
-      mage: 10000, 
-      dragonglass: 10000,
+      mage: 15000,
+      dragonglass: 15000,
       tieFighter: 20000,
     };
   }, []);
+
+  const MOVEMENT_COST_PER_TROOP = 500;
+  const EXP_SELL_PRICE = 10000;
+  const TROOP_SELL_FACTOR = 0.7;
+  const TROOP_SELL_PRICES = useMemo(
+    () => ({
+      foot: Math.floor(SHOP_PRICES.foot * TROOP_SELL_FACTOR),
+      cav: Math.floor(SHOP_PRICES.cav * TROOP_SELL_FACTOR),
+      arch: Math.floor(SHOP_PRICES.arch * TROOP_SELL_FACTOR),
+    }),
+    [SHOP_PRICES]
+  );
 
   const buyCost =
     Math.max(0, buyFoot) * SHOP_PRICES.foot +
@@ -613,10 +625,10 @@ useEffect(() => {
 
 
   const moveCount = Math.max(0, moveFoot) + Math.max(0, moveCav) + Math.max(0, moveArch);
-  const moveCost = moveCount * 1000;
+  const moveCost = moveCount * MOVEMENT_COST_PER_TROOP;
     const tpCount =
     Math.max(0, tpFoot) + Math.max(0, tpCav) + Math.max(0, tpArch);
-  const tpCost = tpCount * 1000;
+  const tpCost = tpCount * MOVEMENT_COST_PER_TROOP;
 
   const tpFromTroops = deployments[tpFromTileId] ?? { foot: 0, cav: 0, arch: 0 };
 
@@ -797,6 +809,161 @@ function farmersControlledBy(pid: string) {
   }
 }
 
+  async function sellExpPoint(unitType: "foot" | "cav" | "arch") {
+    setStatus("");
+
+    const playerRef = doc(db, "games", gameId, "players", playerId);
+
+    try {
+      await runTransaction(db, async (tx) => {
+        const pSnap = await tx.get(playerRef);
+        if (!pSnap.exists()) throw new Error("Player not found");
+
+        const data = pSnap.data() as any;
+        const curExp = Math.max(0, Math.floor(Number(data?.exp?.[unitType] ?? 0)));
+        if (curExp <= 0) throw new Error("No EXP point available to sell");
+
+        const credits = Math.max(0, Number(data?.credits ?? 0));
+        const nextExp = curExp - 1;
+        const nextCredits = credits + EXP_SELL_PRICE;
+
+        tx.update(playerRef, {
+          credits: nextCredits,
+          exp: {
+            ...(data.exp ?? {}),
+            [unitType]: nextExp,
+          },
+        });
+
+        const logRef = doc(collection(db, "games", gameId, "bankLog"));
+        tx.set(logRef, {
+          createdAt: serverTimestamp(),
+          type: "EXP_SALE",
+          playerId,
+          unitType,
+          expFrom: curExp,
+          expTo: nextExp,
+          price: EXP_SELL_PRICE,
+          delta: EXP_SELL_PRICE,
+          from: credits,
+          to: nextCredits,
+        });
+      });
+
+      const label = unitType === "foot" ? "Footsoldier" : unitType === "cav" ? "Cavalry" : "Archer";
+      setStatus(`💰 Sold 1 ${label} EXP point for ${EXP_SELL_PRICE} credits.`);
+    } catch (err: any) {
+      console.error(err);
+      setStatus(`❌ ${err?.message ?? String(err)}`);
+    }
+  }
+
+  async function desertTroop(unitType: "foot" | "cav" | "arch") {
+    setStatus("");
+
+    // Pick at random from tiles currently controlled by this player that actually
+    // contain at least one troop of the requested type. Basecamp is included.
+    const candidates = tiles.filter((t) => {
+      if (t.ownerPlayerId !== playerId) return false;
+      const d = deployments[t.id] ?? { foot: 0, cav: 0, arch: 0 };
+      return Math.max(0, Math.floor(Number(d[unitType] ?? 0))) > 0;
+    });
+
+    if (candidates.length === 0) {
+      setStatus("❌ No controlled tile contains that troop type.");
+      return;
+    }
+
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+    const refund = TROOP_SELL_PRICES[unitType];
+
+    const playerRef = doc(db, "games", gameId, "players", playerId);
+    const tileRef = doc(db, "games", gameId, "tiles", chosen.id);
+    const depRef = doc(db, "games", gameId, "deployments", playerId, "tiles", chosen.id);
+
+    try {
+      await runTransaction(db, async (tx) => {
+        const [pSnap, tSnap, dSnap] = await Promise.all([
+          tx.get(playerRef),
+          tx.get(tileRef),
+          tx.get(depRef),
+        ]);
+
+        if (!pSnap.exists()) throw new Error("Player not found");
+        if (!tSnap.exists()) throw new Error("Selected tile no longer exists");
+
+        const tileData = tSnap.data() as any;
+        if (String(tileData?.ownerPlayerId ?? "") !== playerId) {
+          throw new Error("The randomly selected tile is no longer under your control. Try again.");
+        }
+
+        const depData = (dSnap.exists() ? dSnap.data() : {}) as any;
+        const currentTroops = {
+          foot: Math.max(0, Math.floor(Number(depData?.foot ?? 0))),
+          cav: Math.max(0, Math.floor(Number(depData?.cav ?? 0))),
+          arch: Math.max(0, Math.floor(Number(depData?.arch ?? 0))),
+        };
+
+        if (currentTroops[unitType] <= 0) {
+          throw new Error("That troop is no longer present on the selected tile. Try again.");
+        }
+
+        const pData = pSnap.data() as any;
+        const credits = Math.max(0, Number(pData?.credits ?? 0));
+        const nextCredits = credits + refund;
+        const nextTroops = {
+          ...currentTroops,
+          [unitType]: currentTroops[unitType] - 1,
+        };
+
+        const troopsLeft =
+          nextTroops.foot + nextTroops.cav + nextTroops.arch;
+
+        const isBasecamp = tileData?.isBasecamp === true;
+        const tileNeutralized = troopsLeft === 0 && !isBasecamp;
+
+        tx.update(playerRef, { credits: nextCredits });
+        tx.set(depRef, nextTroops, { merge: true });
+
+        // Same ownership rule as normal troop movement:
+        // an empty non-basecamp tile is released and becomes neutral.
+        if (tileNeutralized) {
+          tx.update(tileRef, { ownerPlayerId: null });
+
+          // If this player's Mage was standing on the released tile,
+          // it is lost as well, consistent with the existing release logic.
+          if (mage?.tileId && String(mage.tileId) === String(chosen.id)) {
+            const myMageRef = doc(db, "games", gameId, "mages", playerId);
+            tx.delete(myMageRef);
+            tx.update(playerRef, { hasMage: false });
+          }
+        }
+
+        const logRef = doc(collection(db, "games", gameId, "bankLog"));
+        tx.set(logRef, {
+          createdAt: serverTimestamp(),
+          type: "DESERTER",
+          playerId,
+          unitType,
+          tileId: chosen.id,
+          refund,
+          troopFrom: currentTroops[unitType],
+          troopTo: currentTroops[unitType] - 1,
+          tileNeutralized,
+          delta: refund,
+          from: credits,
+          to: nextCredits,
+        });
+      });
+
+      const label = unitType === "foot" ? "Footsoldier" : unitType === "cav" ? "Cavalry" : "Archer";
+      setStatus(`🏃 ${label} deserted from tile #${chosen.id}. +${refund} credits.`);
+    } catch (err: any) {
+      console.error(err);
+      setStatus(`❌ ${err?.message ?? String(err)}`);
+    }
+  }
+
   function winnerDivisor(margin: number) {
   const m = Math.max(0, Number(margin) || 0);
   if (m <= 3) return 3;
@@ -817,9 +984,9 @@ function defenderWinDivisor(margin: number) {
 function applyWinnerSurvivors(t: { foot: number; cav: number; arch: number }, div: number) {
   const d = Number(div) || 1;
   return {
-    foot: Math.max(0, Math.floor((Number(t.foot) || 0) / d)),
-    cav: Math.max(0, Math.floor((Number(t.cav) || 0) / d)),
-    arch: Math.max(0, Math.floor((Number(t.arch) || 0) / d)),
+    foot: Math.max(0, Math.ceil((Number(t.foot) || 0) / d)),
+    cav: Math.max(0, Math.ceil((Number(t.cav) || 0) / d)),
+    arch: Math.max(0, Math.ceil((Number(t.arch) || 0) / d)),
   };
 }
 
@@ -859,7 +1026,7 @@ async function moveTroops() {
     return;
   }
 
-  const cost = total * 1000;
+  const cost = total * MOVEMENT_COST_PER_TROOP;
   setStatus("Moving...");
 
   const playerRef = doc(db, "games", gameId, "players", playerId);
@@ -1312,7 +1479,7 @@ async function moveTroops() {
         if (beerculesReward === "CREDITS") {
           tx.update(playerRef, {
             beerCount: nextBeer,
-            credits: curCredits + 5000,
+            credits: curCredits + 10000,
           });
           tx.set(
                 logRef,
@@ -1323,7 +1490,7 @@ async function moveTroops() {
                   beerFrom: curBeer,
                   beerTo: nextBeer,
                   reward: "CREDITS",
-                  deltaCredits: 5000,
+                  deltaCredits: 10000,
                 },
                 { merge: true }
               );
@@ -1379,7 +1546,7 @@ async function moveTroops() {
 
       // UI feedback after transaction
       if (beerculesReward === "CREDITS") {
-        setStatus("🍺 Beercules +1 — Reward: +5000 credits!");
+        setStatus("🍺 Beercules +1 — Reward: +10000 credits!");
       } else if (beerculesReward === "EXP") {
         setStatus(`🍺 Beercules +1 — Reward: +1 EXP (${beerculesExpType})!`);
       } else {
@@ -2242,7 +2409,7 @@ async function teleportMoveWithMage() {
     return;
   }
 
-  const cost = total * 1000;
+  const cost = total * MOVEMENT_COST_PER_TROOP;
   setStatus("Teleporting...");
 
   const playerRef = doc(db, "games", gameId, "players", playerId);
@@ -3260,6 +3427,14 @@ return (
                     <button style={btnStyle} onClick={() => adjustExp("foot", -1)}>
                       -1
                     </button>
+                    <button
+                      style={btnStyle}
+                      disabled={exp.foot <= 0}
+                      onClick={() => sellExpPoint("foot")}
+                      title={`Sell 1 Footsoldier EXP for ${EXP_SELL_PRICE} credits`}
+                    >
+                      💰 Sell (+{EXP_SELL_PRICE})
+                    </button>
                   </div>
 
                   <div style={itemStyle}>
@@ -3272,6 +3447,14 @@ return (
                     </button>
                     <button style={btnStyle} onClick={() => adjustExp("cav", -1)}>
                       -1
+                    </button>
+                    <button
+                      style={btnStyle}
+                      disabled={exp.cav <= 0}
+                      onClick={() => sellExpPoint("cav")}
+                      title={`Sell 1 Cavalry EXP for ${EXP_SELL_PRICE} credits`}
+                    >
+                      💰 Sell (+{EXP_SELL_PRICE})
                     </button>
                   </div>
 
@@ -3286,6 +3469,14 @@ return (
                     <button style={btnStyle} onClick={() => adjustExp("arch", -1)}>
                       -1
                     </button>
+                    <button
+                      style={btnStyle}
+                      disabled={exp.arch <= 0}
+                      onClick={() => sellExpPoint("arch")}
+                      title={`Sell 1 Archer EXP for ${EXP_SELL_PRICE} credits`}
+                    >
+                      💰 Sell (+{EXP_SELL_PRICE})
+                    </button>
                   </div>
                 </>
               );
@@ -3293,7 +3484,7 @@ return (
           </div>
 
           <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75 }}>
-            EXP kan niet onder 0. Als EXP = 0 voor een type → dat type telt niet mee in battle.
+            EXP cannot go below 0. Sell 1 EXP point for <strong>{EXP_SELL_PRICE}</strong> credits. If EXP = 0 for a type → that type does not count in battle.
           </div>
         </section>
 
@@ -3419,6 +3610,32 @@ return (
           <button onClick={buyTroopsToBasecamp} style={{ ...ui.button, marginTop: 10, width: "fit-content" }}>
             Buy (to basecamp)
           </button>
+        </section>
+
+        {/* Deserters / troop resale */}
+        <section style={{ ...ui.card, marginTop: 14 }}>
+          <h2 style={ui.cardTitle}>🏃 Deserters</h2>
+
+          <div style={{ marginBottom: 10, fontSize: 13, opacity: 0.85, lineHeight: 1.5 }}>
+            Sell one troop for <strong>70% of its purchase price</strong>. The deserter is removed at random
+            from one of your controlled tiles where that troop type is present.
+          </div>
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button type="button" onClick={() => desertTroop("foot")} style={ui.button}>
+              🗡️ Footsoldier → +{TROOP_SELL_PRICES.foot}
+            </button>
+            <button type="button" onClick={() => desertTroop("cav")} style={ui.button}>
+              🐎 Cavalry → +{TROOP_SELL_PRICES.cav}
+            </button>
+            <button type="button" onClick={() => desertTroop("arch")} style={ui.button}>
+              🏹 Archer → +{TROOP_SELL_PRICES.arch}
+            </button>
+          </div>
+
+          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.72 }}>
+            The bank log records which tile the deserter left. Basecamp can also be selected if the troop is stationed there.
+          </div>
         </section>
 
         {/* TIE Fighter */}
@@ -3745,7 +3962,7 @@ return (
               <span style={{ opacity: 0.7 }}>({ownedTileIds.length}/60 tiles)</span>
             </div>
 
-            <div style={{ fontSize: 12, opacity: 0.8 }}>Movement cost: 1000 credits per troop per tile</div>
+            <div style={{ fontSize: 12, opacity: 0.8 }}>Movement cost: 500 credits per troop per tile</div>
 
             <div>
               <strong>Basecamp</strong>: {basecamp ? `Tile #${basecamp.id}` : "Waiting..."}
@@ -4020,7 +4237,7 @@ return (
           ) : (
             <>
               <div style={{ marginBottom: 8 }}>
-                Mage on tile: <strong>#{mage.tileId}</strong> — Teleport cost = 1000 credits per troop
+                Mage on tile: <strong>#{mage.tileId}</strong> — Teleport cost = 500 credits per troop
               </div>
 
               <label style={{ fontSize: 12 }}>
@@ -4163,7 +4380,7 @@ return (
                 checked={beerculesReward === "CREDITS"}
                 onChange={() => setBeerculesReward("CREDITS")}
               />
-              +5000 credits
+              +10000 credits
             </label>
 
             <label style={{ display: "flex", gap: 8, alignItems: "center" }}>

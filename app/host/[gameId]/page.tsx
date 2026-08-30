@@ -2608,6 +2608,31 @@ return (
           const who = nameFor(e.playerId);
           const type = String((e as any).type ?? "");
 
+          if (type === "EXP_SALE") {
+            const unitType = String((e as any).unitType ?? "");
+            const icon = unitType === "foot" ? "🗡️" : unitType === "cav" ? "🐎" : unitType === "arch" ? "🏹" : "⭐";
+            const price = Number((e as any).price ?? 10000);
+            const expFrom = Number((e as any).expFrom ?? 0);
+            const expTo = Number((e as any).expTo ?? Math.max(0, expFrom - 1));
+            return (
+              <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                <strong>{who}</strong> sold 1 EXP {icon} ({expFrom} → {expTo}) for +{price} credits
+              </li>
+            );
+          }
+
+          if (type === "DESERTER") {
+            const unitType = String((e as any).unitType ?? "");
+            const icon = unitType === "foot" ? "🗡️" : unitType === "cav" ? "🐎" : unitType === "arch" ? "🏹" : "⚔️";
+            const tileId = String((e as any).tileId ?? "?");
+            const refund = Number((e as any).refund ?? 0);
+            return (
+              <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                <strong>{who}</strong>: 🏃 {icon} deserter left tile #{tileId} (+{refund} credits)
+              </li>
+            );
+          }
+
           // EXP ADJUST: toon exp i.p.v. credits
           if (type === "EXP_ADJUST") {
             const unitType = String((e as any).unitType ?? "");
