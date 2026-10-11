@@ -939,7 +939,7 @@ async function triggerFrostGiantsAttack() {
   // Play only after the attack was successfully committed.
   playHostFrostGiantsAudio();
 
-  alert("❄️ Frost Giants attacked 15 random tiles! Winter level reset to 0.");
+  //alert("❄️ Frost Giants attacked 15 random tiles! Winter level reset to 0.");
 }
 async function bamboozleDestroyDragonglass() {
   if (!dgTargetPlayerId) {
