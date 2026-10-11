@@ -129,6 +129,10 @@ export default function HostPage() {
     playHostAudio("/audio/airstrike.mp3", 0.9);
   }
 
+  function playHostFrostGiantsAudio() {
+    playHostAudio("/audio/frost-giants-attack.mp3", 0.95);
+  }
+
   function victorySoundForAvatar(avatar: string | undefined | null) {
     const a = String(avatar ?? "").trim();
 
@@ -931,6 +935,9 @@ async function triggerFrostGiantsAttack() {
   );
 
   await batch.commit();
+
+  // Play only after the attack was successfully committed.
+  playHostFrostGiantsAudio();
 
   alert("❄️ Frost Giants attacked 15 random tiles! Winter level reset to 0.");
 }
