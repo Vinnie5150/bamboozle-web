@@ -505,6 +505,24 @@ useEffect(() => {
     return () => unsub();
   }, [gameId, playerId]);
 
+  // Personal activity: existing bankLog entries, restricted to this player.
+  // No composite Firestore index needed: sort locally after filtering by playerId.
+  useEffect(() => {
+    if (!gameId || !playerId) return;
+    const ql = query(
+      collection(db, "games", gameId, "bankLog"),
+      where("playerId", "==", playerId)
+    );
+    return onSnapshot(ql, (snap) => {
+      const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+      rows.sort((a, b) => {
+        const time = (x: any) => x.createdAt?.toMillis?.() ?? 0;
+        return time(b) - time(a);
+      });
+      setPersonalLog(rows.slice(0, 20));
+    }, (err) => console.error("Personal activity log failed:", err));
+  }, [gameId, playerId]);
+
   // ====== derived ======
   const hasMage = !!player?.hasMage;
   const basecamp = useMemo(() => {
