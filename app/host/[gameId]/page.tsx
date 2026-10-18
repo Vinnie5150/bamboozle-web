@@ -486,6 +486,40 @@ useEffect(() => {
 }, [gameId]);
 
 
+  // Personal battle activity mirror. The host is already the central game controller.
+  // Deterministic document IDs prevent duplicate entries after refresh/reconnect.
+  useEffect(() => {
+    if (!gameId) return;
+    const activityTypes = new Set(["CONQUER", "RELEASE", "ATTACKER_WIN", "DEFENDER_HOLD", "DRAW", "AIRSTRIKE"]);
+    const ql = query(collection(db, "games", gameId, "battleLog"), orderBy("createdAt", "desc"), limit(100));
+    const unsub = onSnapshot(ql, (snap) => {
+      for (const change of snap.docChanges()) {
+        if (change.type !== "added") continue;
+        const e = change.doc.data() as any;
+        const type = String(e.type ?? "");
+        if (!activityTypes.has(type) && !type.startsWith("BAMBOOZLE_") && !type.includes("FROST")) continue;
+        const ids = new Set<string>();
+        for (const key of ["playerId", "ownerId", "ownerPlayerId", "oldOwnerId", "newOwnerId", "attackerId", "defenderId", "victimPlayerId", "targetPlayerId", "actorId"]) {
+          const id = e[key];
+          if (typeof id === "string" && id) ids.add(id);
+        }
+        // Frost Giants store affected players inside their result array.
+        if (type === "FROST_GIANTS_ATTACK" && Array.isArray(e.results)) {
+          for (const r of e.results) {
+            const id = r?.ownerId;
+            if (typeof id === "string" && id) ids.add(id);
+          }
+        }
+        for (const id of ids) {
+          const ref = doc(db, "games", gameId, "players", id, "battleActivity", change.doc.id);
+          setDoc(ref, { ...e, sourceBattleLogId: change.doc.id }, { merge: false })
+            .catch((err) => console.error("Battle activity mirror failed:", err));
+        }
+      }
+    }, (err) => console.error("Battle activity source listener failed:", err));
+    return () => unsub();
+  }, [gameId]);
+
   // game doc listener (timer)
   useEffect(() => {
     const ref = doc(db, "games", gameId);

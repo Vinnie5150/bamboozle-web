@@ -491,45 +491,18 @@ useEffect(() => {
     return () => unsubs.forEach((u) => u());
   }, [gameId, players]);
 
-  // "Notifications" from battleLog (last 30, filter client-side)
-  useEffect(() => {
-    const ql = query(
-      collection(db, "games", gameId, "battleLog"),
-      orderBy("createdAt", "desc"),
-      limit(10)
-    );
-
-    const unsub = onSnapshot(ql, (snap) => {
-      const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as any[];
-
-      const mine = rows.filter((r) => {
-        if (r.type === "CONQUER") return r.newOwnerId === playerId;
-        if (r.type === "RELEASE") return r.oldOwnerId === playerId;
-        return r.attackerId === playerId || r.defenderId === playerId;
-      });
-
-      setBattleLogMine(mine);
-    });
-
-    return () => unsub();
-  }, [gameId, playerId]);
-
-  // Personal activity: existing bankLog entries, restricted to this player.
-  // No composite Firestore index needed: sort locally after filtering by playerId.
+  // Read only this player's most recent 20 battle/tile events.
   useEffect(() => {
     if (!gameId || !playerId) return;
     const ql = query(
-      collection(db, "games", gameId, "bankLog"),
-      where("playerId", "==", playerId)
+      collection(db, "games", gameId, "players", playerId, "battleActivity"),
+      orderBy("createdAt", "desc"),
+      limit(20)
     );
-    return onSnapshot(ql, (snap) => {
-      const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-      rows.sort((a, b) => {
-        const time = (x: any) => x.createdAt?.toMillis?.() ?? 0;
-        return time(b) - time(a);
-      });
-      setPersonalLog(rows.slice(0, 20));
-    }, (err) => console.error("Personal activity log failed:", err));
+    const unsub = onSnapshot(ql, (snap) => {
+      setBattleLogMine(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Array<{ id: string } & BattleLogRow>);
+    }, (err) => console.error("Personal battle activity listener failed:", err));
+    return () => unsub();
   }, [gameId, playerId]);
 
   // ====== derived ======
@@ -3350,68 +3323,6 @@ return (
           </div>
         </div>
 
-        {/* Notifications */}
-        <div style={{ marginTop: 14 }}>
-          <h3 style={ui.cardTitle}>Notifications</h3>
-          <div style={{ maxHeight: 220, overflow: "auto", paddingRight: 6 }}>
-            {battleLogMine.length === 0 ? (
-              <div style={{ opacity: 0.75, fontSize: 13 }}>No notifications yet.</div>
-            ) : (
-              <ul style={{ margin: 0, paddingLeft: 18 }}>
-                {battleLogMine.map((e) => {
-                  let text = "";
-
-                  if (e.type === "CONQUER") {
-                    text = `You conquered tile #${e.tileId}.`;
-                  } else if (e.type === "RELEASE") {
-                    text = `You left tile #${e.tileId} empty (it became neutral).`;
-                  } else if (e.type === "ATTACKER_WIN") {
-                    const defender = nameFor((e as any).defenderId);
-                    text =
-                      (e as any).attackerId === playerId
-                        ? `You attacked tile #${e.tileId} from ${defender} and WON.`
-                        : `You were attacked on tile #${e.tileId} by ${nameFor((e as any).attackerId)} and LOST.`;
-                  } else if (e.type === "DEFENDER_HOLD") {
-                    const defender = nameFor((e as any).defenderId);
-                    text =
-                      (e as any).attackerId === playerId
-                        ? `You attacked tile #${e.tileId} from ${defender} but LOST.`
-                        : `You were attacked on tile #${e.tileId} by ${nameFor((e as any).attackerId)} and WON (held the tile).`;
-                  } else if (e.type === "DRAW") {
-                    const attacker = nameFor((e as any).attackerId);
-                    const defender = nameFor((e as any).defenderId);
-                    text =
-                      (e as any).attackerId === playerId
-                        ? `You attacked tile #${e.tileId} from ${defender} — DRAW. Both armies destroyed.`
-                        : `You were attacked on tile #${e.tileId} by ${attacker} — DRAW. Both armies destroyed.`;
-                  } else if (e.type === "AIRSTRIKE") {
-                    const attacker = nameFor((e as any).attackerId);
-                    const defender = nameFor((e as any).defenderId);
-                    const neutralized = !!(e as any).neutralized;
-
-                    text =
-                      (e as any).attackerId === playerId
-                        ? `You launched an airstrike on ${defender} at tile #${e.tileId}${
-                            neutralized ? " — all defenders destroyed, tile neutralized." : "."
-                          }`
-                        : `${attacker} launched an airstrike on you at tile #${e.tileId}${
-                            neutralized ? " — all defenders destroyed, tile neutralized." : "."
-                          }`;
-                  } else {
-                    text = `Event on tile #${(e as any).tileId}`;
-                  }
-
-                  return (
-                    <li key={(e as any).id} style={{ marginBottom: 6, fontSize: 13, opacity: 0.95 }}>
-                      {text}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        </div>
-
         {/* ===== BUY ACTIONS (moved under Notifications) ===== */}
 
         {/* Experience */}
@@ -4501,6 +4412,78 @@ return (
             </div>
           )}
         </section>
+        {/* Personal Battle & Tile Log */}
+        <div style={{ marginTop: 14 }}>
+          <h3 style={ui.cardTitle}>⚔️ Personal Battle & Tile Log (last 20)</h3>
+          <div style={{ maxHeight: 220, overflow: "auto", paddingRight: 6 }}>
+            {battleLogMine.length === 0 ? (
+              <div style={{ opacity: 0.75, fontSize: 13 }}>No battle or tile changes yet.</div>
+            ) : (
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {battleLogMine.map((e) => {
+                  let text = "";
+
+                  if (e.type === "CONQUER") {
+                    text = `You conquered tile #${e.tileId}.`;
+                  } else if (e.type === "RELEASE") {
+                    text = `You left tile #${e.tileId} empty (it became neutral).`;
+                  } else if (e.type === "ATTACKER_WIN") {
+                    const defender = nameFor((e as any).defenderId);
+                    text =
+                      (e as any).attackerId === playerId
+                        ? `You attacked tile #${e.tileId} from ${defender} and WON.`
+                        : `You were attacked on tile #${e.tileId} by ${nameFor((e as any).attackerId)} and LOST.`;
+                  } else if (e.type === "DEFENDER_HOLD") {
+                    const defender = nameFor((e as any).defenderId);
+                    text =
+                      (e as any).attackerId === playerId
+                        ? `You attacked tile #${e.tileId} from ${defender} but LOST.`
+                        : `You were attacked on tile #${e.tileId} by ${nameFor((e as any).attackerId)} and WON (held the tile).`;
+                  } else if (e.type === "DRAW") {
+                    const attacker = nameFor((e as any).attackerId);
+                    const defender = nameFor((e as any).defenderId);
+                    text =
+                      (e as any).attackerId === playerId
+                        ? `You attacked tile #${e.tileId} from ${defender} — DRAW. Both armies destroyed.`
+                        : `You were attacked on tile #${e.tileId} by ${attacker} — DRAW. Both armies destroyed.`;
+                  } else if (e.type === "AIRSTRIKE") {
+                    const attacker = nameFor((e as any).attackerId);
+                    const defender = nameFor((e as any).defenderId);
+                    const neutralized = !!(e as any).neutralized;
+
+                    text =
+                      (e as any).attackerId === playerId
+                        ? `You launched an airstrike on ${defender} at tile #${e.tileId}${
+                            neutralized ? " — all defenders destroyed, tile neutralized." : "."
+                          }`
+                        : `${attacker} launched an airstrike on you at tile #${e.tileId}${
+                            neutralized ? " — all defenders destroyed, tile neutralized." : "."
+                          }`;
+                  } else if (String(e.type).startsWith("BAMBOOZLE_")) {
+                    const type = String(e.type).replaceAll("_", " ").toLowerCase();
+                    text = `🎴 ${type}${e.tileId != null ? ` on tile #${e.tileId}` : ""}.`;
+                  } else if (String(e.type).includes("FROST")) {
+                    text = `❄️ Frost Giants attack${e.tileId != null ? ` on tile #${e.tileId}` : ""}.`;
+                  } else {
+                    text = `Event on tile #${(e as any).tileId}`;
+                  }
+
+                  return (
+                    <li key={(e as any).id} style={{ marginBottom: 6, fontSize: 13, opacity: 0.95 }}>
+                      {text}
+                      {(e as any).createdAt?.toDate?.() && (
+                        <div style={{ opacity: 0.6, fontSize: 11, marginTop: 3 }}>
+                          {(e as any).createdAt.toDate().toLocaleString("en-GB")}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </div>
+
       </aside>
     </div>
   </main>
