@@ -474,12 +474,12 @@ useEffect(() => {
   const ql = query(
     collection(db, "games", gameId, "bankLog"),
     orderBy("createdAt", "desc"),
-    limit(20)
+    limit(100)
   );
 
   const unsub = onSnapshot(ql, (snap) => {
     const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-    setBankLog(rows);
+    setBankLog(rows.filter((r) => r.type !== "FARMER_INCOME").slice(0, 20));
   });
 
   return () => unsub();

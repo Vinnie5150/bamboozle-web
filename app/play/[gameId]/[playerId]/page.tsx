@@ -18,6 +18,7 @@ import {
   serverTimestamp,
   limit,
   getDoc,
+  where,
 } from "firebase/firestore";
 
 import MapSvg from "@/app/_components/MapSvg";
@@ -231,6 +232,7 @@ const [rankingRows, setRankingRows] = useState<
   const [battleLogMine, setBattleLogMine] = useState<Array<{ id: string } & BattleLogRow>>(
     []
   );
+  const [personalLog, setPersonalLog] = useState<Array<{ id: string; [key: string]: any }>>([]);
 
   // ====== HEX adjacency (single source of truth) ======
 const ALL_TILE_IDS = useMemo(() => {
@@ -510,6 +512,24 @@ useEffect(() => {
     });
 
     return () => unsub();
+  }, [gameId, playerId]);
+
+  // Personal activity: existing bankLog entries, restricted to this player.
+  // No composite Firestore index needed: sort locally after filtering by playerId.
+  useEffect(() => {
+    if (!gameId || !playerId) return;
+    const ql = query(
+      collection(db, "games", gameId, "bankLog"),
+      where("playerId", "==", playerId)
+    );
+    return onSnapshot(ql, (snap) => {
+      const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+      rows.sort((a, b) => {
+        const time = (x: any) => x.createdAt?.toMillis?.() ?? 0;
+        return time(b) - time(a);
+      });
+      setPersonalLog(rows.slice(0, 20));
+    }, (err) => console.error("Personal activity log failed:", err));
   }, [gameId, playerId]);
 
   // ====== derived ======
@@ -4441,6 +4461,45 @@ return (
           <button onClick={drinkBeerculesPint} style={{ ...ui.button, marginTop: 12, width: "fit-content" }}>
             🍺 Drink Pint (Beercules +1)
           </button>
+        </section>
+
+        <section style={ui.card}>
+          <h2 style={ui.cardTitle}>📜 Personal Activity Log (last 20)</h2>
+          {personalLog.length === 0 ? (
+            <div style={{ opacity: 0.75 }}>No personal transactions yet.</div>
+          ) : (
+            <div style={{ display: "grid", gap: 8, maxHeight: 440, overflowY: "auto" }}>
+              {personalLog.map((e) => {
+                const type = String(e.type ?? "");
+                const n = (v: any) => Number(v ?? 0).toLocaleString("en-US");
+                const unit = (v: any) => v === "foot" ? "🗡️ Foot" : v === "cav" ? "🐎 Cavalry" : v === "arch" ? "🏹 Archer" : String(v ?? "EXP");
+                let message = "";
+                if (type === "FARMER_INCOME") message = `🌾 Farmer income: +${n(e.delta)} credits (${n(e.farmers)} farmers${Number(e.elapsedDays ?? 1) > 1 ? ` × ${e.elapsedDays} days` : ""})`;
+                else if (type === "FARMER_PURCHASE") message = `🌾 Bought ${n(e.quantity)} farmers on tile #${e.tileId} (-${n(e.cost)} credits)`;
+                else if (type === "EXP_ADJUST") message = `⭐ ${unit(e.unitType)} EXP: ${Number(e.delta) > 0 ? "+" : ""}${n(e.delta)} (${n(e.from)} → ${n(e.to)})`;
+                else if (type === "EXP_SALE") message = `💰 Sold 1 ${unit(e.unitType)} EXP (+${n(e.price)} credits)`;
+                else if (type === "BEERCULES") {
+                  const reward = e.reward === "CREDITS" ? `+${n(e.deltaCredits)} credits` : e.reward === "EXP" ? `+1 ${unit(e.expType)} EXP` : "🎴 Draw 1 Bamboozle card";
+                  message = `🍺 Beercules ${e.beerFrom} → ${e.beerTo}: ${reward}`;
+                }
+                else if (type === "DESERTER") message = `🏃 Deserter: ${unit(e.unitType)} left tile #${e.tileId} (+${n(e.refund)} credits)`;
+                else if (type === "DRAGONGLASS_PURCHASE") message = `🔷 Bought Dragonglass (-${n(e.cost)} credits)`;
+                else if (type === "DRAGONGLASS_FREE") message = "🔷 Received free Dragonglass";
+                else if (type === "MAGE_PURCHASE") message = `🧙 Bought Mage on tile #${e.tileId} (-${n(e.cost)} credits)`;
+                else if (type === "MAGE_FREE") message = `🧙 Received free Mage on tile #${e.tileId}`;
+                else if (type === "DART_FREE_ARCHER") message = `🎯 +${n(e.deltaArch ?? 1)} Archer on tile #${e.tileId}`;
+                else if (type) message = `📋 ${type.replaceAll("_", " ")}${e.delta != null ? `: ${Number(e.delta) > 0 ? "+" : ""}${n(e.delta)} credits` : ""}`;
+                else message = `💳 Credits: ${Number(e.delta) > 0 ? "+" : ""}${n(e.delta)} (${n(e.from)} → ${n(e.to)})`;
+                const date = e.createdAt?.toDate?.();
+                return (
+                  <div key={e.id} style={{ padding: "8px 10px", border: "1px solid rgba(128,128,128,0.25)", borderRadius: 8 }}>
+                    <div style={{ fontSize: 13 }}>{message}</div>
+                    {date && <div style={{ opacity: 0.6, fontSize: 11, marginTop: 3 }}>{date.toLocaleString("en-GB")}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </section>
       </aside>
     </div>
