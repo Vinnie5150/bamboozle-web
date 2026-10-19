@@ -945,6 +945,7 @@ async function triggerFrostGiantsAttack() {
       before: cur,
       after: next,
       losses,
+      neutralized: becomesEmpty,
     });
   }
 

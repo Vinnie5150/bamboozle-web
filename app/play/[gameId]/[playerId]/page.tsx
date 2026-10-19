@@ -4503,11 +4503,20 @@ return (
                       : [];
                     const ids = affected.map((r: any) => `#${r.tileId}`).join("; ");
                     const used = affected.some((r: any) => r.dragonglassConsumed === true);
-                    const losses = affected.reduce((sum: number, r: any) =>
-                      sum + Number(r?.losses?.foot ?? 0) + Number(r?.losses?.cav ?? 0) + Number(r?.losses?.arch ?? 0), 0);
+                    const lost = affected.reduce((sum: { foot: number; cav: number; arch: number }, r: any) => ({
+                      foot: sum.foot + Number(r?.losses?.foot ?? 0),
+                      cav: sum.cav + Number(r?.losses?.cav ?? 0),
+                      arch: sum.arch + Number(r?.losses?.arch ?? 0),
+                    }), { foot: 0, cav: 0, arch: 0 });
+                    const neutralized = affected.filter((r: any) =>
+                      r?.neutralized === true ||
+                      (r?.neutralized == null && r?.after != null &&
+                        Number(r.after.foot ?? 0) + Number(r.after.cav ?? 0) + Number(r.after.arch ?? 0) === 0)
+                    ).map((r: any) => `#${r.tileId}`).join("; ");
+                    const lossText = `Lost: ${lost.foot} Footsoldiers; ${lost.cav} Cavalry; ${lost.arch} Archers`;
                     text = affected.length === 0
                       ? "❄️ Frost Giants — Your tiles were spared."
-                      : `❄️ Frost Giants — Tiles ${ids} — ${used ? "🛡️ Dragonglass used; no losses" : `No Dragonglass; ${losses} troops lost`}.`;
+                      : `❄️ Frost Giants — Tiles ${ids} — ${used ? "🛡️ Dragonglass used; no losses" : `No Dragonglass; ${lossText}`}${neutralized ? ` — Neutralized: ${neutralized}` : ""}.`;
                   } else if (String(e.type).includes("FROST")) {
                     text = `❄️ Frost Giants attack${e.tileId != null ? ` on tile #${e.tileId}` : ""}.`;
                   } else {
