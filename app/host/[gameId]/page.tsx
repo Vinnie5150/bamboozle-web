@@ -504,12 +504,9 @@ useEffect(() => {
           if (typeof id === "string" && id) ids.add(id);
         }
         // Frost Giants store affected players inside their result array.
-        if (type === "FROST_GIANTS_ATTACK" && Array.isArray(e.results)) {
-          for (const r of e.results) {
-            const id = r?.ownerId;
-            if (typeof id === "string" && id) ids.add(id);
-          }
-        }
+        // Frost Giants personal entries are written atomically by the attack batch below.
+        // Do not mirror them again from this listener.
+        if (type === "FROST_GIANTS_ATTACK") continue;
         for (const id of ids) {
           const ref = doc(db, "games", gameId, "players", id, "battleActivity", change.doc.id);
           setDoc(ref, { ...e, sourceBattleLogId: change.doc.id }, { merge: false })
@@ -976,6 +973,25 @@ async function triggerFrostGiantsAttack() {
     },
     { merge: true }
   );
+
+  // Write one personal Frost Giants event for each affected player in the SAME batch.
+  // A player with several hit tiles gets one compact summary, not one entry per tile.
+  const affectedOwnerIds = new Set<string>();
+  for (const result of results) {
+    if (typeof result.ownerId === "string" && result.ownerId) {
+      affectedOwnerIds.add(result.ownerId);
+    }
+  }
+  for (const ownerId of affectedOwnerIds) {
+    const personalRef = doc(db, "games", gameId, "players", ownerId, "battleActivity", logRef.id);
+    batch.set(personalRef, {
+      createdAt: serverTimestamp(),
+      type: "FROST_GIANTS_ATTACK",
+      attackedTileIds: attacked.map((x) => String(x.id)),
+      results: results.filter((r) => r.ownerId === ownerId),
+      sourceBattleLogId: logRef.id,
+    });
+  }
 
   await batch.commit();
 
