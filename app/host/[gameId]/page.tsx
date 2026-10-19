@@ -852,6 +852,9 @@ async function triggerFrostGiantsAttack() {
   const batch = writeBatch(db);
 
   const results: any[] = [];
+  // Cache protection for this attack: a player's Dragonglass protects ALL hit tiles.
+  const dragonglassAtAttack = new Map<string, boolean>();
+  const dragonglassConsumedFor = new Set<string>();
 
   for (const t of attacked) {
     const tileId = String(t.id);
@@ -872,11 +875,17 @@ async function triggerFrostGiantsAttack() {
     const playerRef = doc(db, "games", gameId, "players", ownerId);
     const playerSnap = await getDoc(playerRef);
     const playerData = (playerSnap.data() as any) ?? {};
-    const hasDG = !!playerData.hasDragonglass;
+    if (!dragonglassAtAttack.has(ownerId)) {
+      dragonglassAtAttack.set(ownerId, !!playerData.hasDragonglass);
+    }
+    const hasDG = dragonglassAtAttack.get(ownerId) === true;
 
       if (hasDG) {
-        // consume dragonglass, no troop loss
-        batch.update(playerRef, { hasDragonglass: false });
+        // Consume once, but protect every affected tile in this attack.
+        if (!dragonglassConsumedFor.has(ownerId)) {
+          batch.update(playerRef, { hasDragonglass: false });
+          dragonglassConsumedFor.add(ownerId);
+        }
 
         results.push({
           tileId,
@@ -2702,6 +2711,14 @@ return (
             );
           }
                     // ✅ Dragonglass / Mage logs
+          if (type === "TROOP_PURCHASE") {
+            return (
+              <li key={(e as any).id} style={{ marginBottom: 6 }}>
+                <strong>{who}</strong> bought ⚔️ {Number(e.foot ?? 0)} Foot; {Number(e.cav ?? 0)} Cavalry; {Number(e.arch ?? 0)} Archer (-{Number(e.cost ?? 0)} credits)
+              </li>
+            );
+          }
+
           if (type === "FARMER_PURCHASE") {
             const cost = Number((e as any).cost ?? 0);
             const qty = Number((e as any).quantity ?? 0);

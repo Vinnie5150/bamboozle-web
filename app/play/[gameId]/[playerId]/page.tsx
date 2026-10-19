@@ -1824,6 +1824,22 @@ async function moveTroops() {
           },
           { merge: true }
         );
+
+        // Log in the same atomic purchase transaction; both logs read bankLog.
+        const purchaseLogRef = doc(collection(db, "games", gameId, "bankLog"));
+        tx.set(purchaseLogRef, {
+          createdAt: serverTimestamp(),
+          type: "TROOP_PURCHASE",
+          playerId,
+          foot: qFoot,
+          cav: qCav,
+          arch: qArch,
+          tileId: basecamp.id,
+          cost,
+          delta: -cost,
+          from: credits,
+          to: credits - cost,
+        });
       });
 
       setBuyFoot(0);
@@ -4404,6 +4420,7 @@ return (
                 const unit = (v: any) => v === "foot" ? "🗡️ Foot" : v === "cav" ? "🐎 Cavalry" : v === "arch" ? "🏹 Archer" : String(v ?? "EXP");
                 let message = "";
                 if (type === "FARMER_INCOME") message = `🌾 Farmer income: +${n(e.delta)} credits (${n(e.farmers)} farmers${Number(e.elapsedDays ?? 1) > 1 ? ` × ${e.elapsedDays} days` : ""})`;
+                else if (type === "TROOP_PURCHASE") message = `⚔️ Bought ${n(e.foot)} Foot; ${n(e.cav)} Cavalry; ${n(e.arch)} Archer (-${n(e.cost)} credits)`;
                 else if (type === "FARMER_PURCHASE") message = `🌾 Bought ${n(e.quantity)} farmers on tile #${e.tileId} (-${n(e.cost)} credits)`;
                 else if (type === "EXP_ADJUST") message = `⭐ ${unit(e.unitType)} EXP: ${Number(e.delta) > 0 ? "+" : ""}${n(e.delta)} (${n(e.from)} → ${n(e.to)})`;
                 else if (type === "EXP_SALE") message = `💰 Sold 1 ${unit(e.unitType)} EXP (+${n(e.price)} credits)`;
@@ -4480,6 +4497,17 @@ return (
                   } else if (String(e.type).startsWith("BAMBOOZLE_")) {
                     const type = String(e.type).replaceAll("_", " ").toLowerCase();
                     text = `🎴 ${type}${e.tileId != null ? ` on tile #${e.tileId}` : ""}.`;
+                  } else if (e.type === "FROST_GIANTS_ATTACK") {
+                    const affected = Array.isArray((e as any).results)
+                      ? (e as any).results.filter((r: any) => String(r?.ownerId ?? "") === playerId)
+                      : [];
+                    const ids = affected.map((r: any) => `#${r.tileId}`).join("; ");
+                    const used = affected.some((r: any) => r.dragonglassConsumed === true);
+                    const losses = affected.reduce((sum: number, r: any) =>
+                      sum + Number(r?.losses?.foot ?? 0) + Number(r?.losses?.cav ?? 0) + Number(r?.losses?.arch ?? 0), 0);
+                    text = affected.length === 0
+                      ? "❄️ Frost Giants — Your tiles were spared."
+                      : `❄️ Frost Giants — Tiles ${ids} — ${used ? "🛡️ Dragonglass used; no losses" : `No Dragonglass; ${losses} troops lost`}.`;
                   } else if (String(e.type).includes("FROST")) {
                     text = `❄️ Frost Giants attack${e.tileId != null ? ` on tile #${e.tileId}` : ""}.`;
                   } else {
