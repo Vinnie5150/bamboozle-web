@@ -174,7 +174,7 @@ export default function HostPage() {
   // PRACTICE MODE: farmers pay once per full day.
   // For the real game, change these values back to 100 credits / 60 * 1000 ms.
   const FARMER_INCOME_PER_DAY = 100;
-  const FARMER_PAYOUT_MS = 24 * 60 * 60 * 1000;
+  const FARMER_PAYOUT_MS = 60 * 1000;
 
   const [magesByPlayer, setMagesByPlayer] = useState<Record<string, { tileId: string } | null>>(
     {}
@@ -708,7 +708,7 @@ useEffect(() => {
       processFarmerPayout().catch((err) =>
         console.error("Automatic farmer payout check failed:", err)
       );
-    }, 5 * 60 * 1000);
+    }, 60 * 1000);
 
     return () => window.clearInterval(timer);
 
@@ -2758,7 +2758,7 @@ return (
               <li key={(e as any).id} style={{ marginBottom: 6 }}>
                 <strong>{who}</strong> 🌾 farmer income: +{delta} credits
                 {" "}({farmers} farmer{farmers === 1 ? "" : "s"}
-                {days > 1 ? ` × ${days} days` : ""} per day; {from} → {to})
+                {days > 1 ? ` × ${days} minutes` : ""} per minute; {from} → {to})
               </li>
             );
           }

@@ -563,7 +563,7 @@ useEffect(() => {
     );
   }, [farmerEligibleTiles]);
 
-  const farmerIncomePerDay = myControlledFarmers * 100;
+  const farmerIncomePerMinute = myControlledFarmers * 100;
 
   const farmerPurchaseQty = Math.max(0, Math.floor(Number(buyFarmers) || 0));
   const farmerPurchaseCost = farmerPurchaseQty * SHOP_PRICES.farmer;
@@ -3635,7 +3635,7 @@ return (
 
           <div style={{ marginBottom: 8, opacity: 0.88 }}>
             Farmers cost <strong>{SHOP_PRICES.farmer}</strong> credits each and generate{" "}
-            <strong>100 credits per day</strong> for whoever controls their tile.
+            <strong>100 credits per minute</strong> for whoever controls their tile.
           </div>
 
           <div style={{ marginBottom: 10, fontSize: 13, opacity: 0.8 }}>
@@ -3654,7 +3654,7 @@ return (
           >
             🌾 Farmers currently under your rule: <strong>{myControlledFarmers}</strong>
             <br />
-            💰 Current farmer income: <strong>+{farmerIncomePerDay}/day</strong>
+            💰 Current farmer income: <strong>+{farmerIncomePerMinute}/minute</strong>
           </div>
 
           <label style={{ fontSize: 12 }}>
@@ -4419,7 +4419,7 @@ return (
                 const n = (v: any) => Number(v ?? 0).toLocaleString("en-US");
                 const unit = (v: any) => v === "foot" ? "🗡️ Foot" : v === "cav" ? "🐎 Cavalry" : v === "arch" ? "🏹 Archer" : String(v ?? "EXP");
                 let message = "";
-                if (type === "FARMER_INCOME") message = `🌾 Farmer income: +${n(e.delta)} credits (${n(e.farmers)} farmers${Number(e.elapsedDays ?? 1) > 1 ? ` × ${e.elapsedDays} days` : ""})`;
+                if (type === "FARMER_INCOME") message = `🌾 Farmer income: +${n(e.delta)} credits (${n(e.farmers)} farmers${Number(e.elapsedDays ?? 1) > 1 ? ` × ${e.elapsedDays} minutes` : ""})`;
                 else if (type === "TROOP_PURCHASE") message = `⚔️ Bought ${n(e.foot)} Foot; ${n(e.cav)} Cavalry; ${n(e.arch)} Archer (-${n(e.cost)} credits)`;
                 else if (type === "FARMER_PURCHASE") message = `🌾 Bought ${n(e.quantity)} farmers on tile #${e.tileId} (-${n(e.cost)} credits)`;
                 else if (type === "EXP_ADJUST") message = `⭐ ${unit(e.unitType)} EXP: ${Number(e.delta) > 0 ? "+" : ""}${n(e.delta)} (${n(e.from)} → ${n(e.to)})`;
